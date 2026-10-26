@@ -48,7 +48,12 @@ if has native; then
 fi
 
 if has firmware; then
-  run "firmware builds" "$pio" run -e passthrough_teensy41 -e record_teensy41 -e passthrough_teensy36 -e record_teensy36
+  # Every example, for every board. The Makefile's build target has the same list.
+  envs=()
+  for example in passthrough record reverb delay overdrive modulation vsthost; do
+    envs+=(-e "${example}_teensy41" -e "${example}_teensy36")
+  done
+  run "firmware builds" "$pio" run "${envs[@]}"
 fi
 
 if [[ ${#failures[@]} -gt 0 ]]; then
