@@ -36,7 +36,8 @@ put effects between the inputs and the outputs, with the serial monitor as
 the front panel (see [Examples](#examples)), and `examples/VSTHost` runs
 third-party VST-style plug-ins there (see [Hosting VST-style effect
 plug-ins](#hosting-vst-style-effect-plug-ins)), and `examples/VSTHostMIDI` maps a MIDI
-controller's knobs onto them.
+controller's knobs onto them. `examples/CumulusReverb` does the same for
+Clouds' reverb.
 
 **Status: compiles for both boards, untested on hardware.** Everything the
 host can do without a device (descriptor parsing, rate pacing, feedback
@@ -118,6 +119,7 @@ lists its keys at the top and `s` prints the status everywhere.
 | `Modulation`  | The Audio Library's chorus and flanger side by side, with a mixer choosing which one reaches the output. |
 | `VSTHost`     | Five Airwindows plug-ins in one rack object, in series and in parallel, from their unmodified sources.      |
 | `VSTHostMIDI` | The `VSTHost` rack played from a USB MIDI controller on a hub beside the interface: CCs mapped to plug-in parameters, mix, gain and bypass, with MIDI learn. |
+| `CumulusReverb` | The reverb of Mutable Instruments' Clouds, from its unmodified sources, as a plug-in played from a USB MIDI controller: amount, time, diffusion, tone and input on CCs, bypass and clear on buttons, with MIDI learn. |
 
 They all ask the interface for 44.1 kHz because the Audio Library's effects
 assume it; the graph runs at whatever rate the interface ends up streaming,
