@@ -13,10 +13,27 @@
   "license": "MIT",
   "frameworks": "arduino",
   "platforms": "teensy",
-  "headers": "USBAudioHost.h",
+  "headers": ["USBAudioHost.h", "AudioEffectVST.h"],
   "examples": [
     { "name": "Passthrough", "base": "examples/Passthrough", "files": ["Passthrough.ino"] },
-    { "name": "RecordToSD", "base": "examples/RecordToSD", "files": ["RecordToSD.ino"] }
+    { "name": "RecordToSD", "base": "examples/RecordToSD", "files": ["RecordToSD.ino"] },
+    { "name": "Reverb", "base": "examples/Reverb", "files": ["Reverb.ino"] },
+    { "name": "StereoDelay", "base": "examples/StereoDelay", "files": ["StereoDelay.ino"] },
+    { "name": "Overdrive", "base": "examples/Overdrive", "files": ["Overdrive.ino"] },
+    { "name": "Modulation", "base": "examples/Modulation", "files": ["Modulation.ino"] },
+    {
+      "name": "VSTHost",
+      "base": "examples/VSTHost",
+      "files": [
+        "VSTHost.ino", "plugins.h", "plugins.cpp",
+        "airwindows/README.md", "airwindows/LICENSE",
+        "airwindows/Capacitor/Capacitor.h", "airwindows/Capacitor/Capacitor.cpp", "airwindows/Capacitor/CapacitorProc.cpp",
+        "airwindows/Density/Density.h", "airwindows/Density/Density.cpp", "airwindows/Density/DensityProc.cpp",
+        "airwindows/Pressure4/Pressure4.h", "airwindows/Pressure4/Pressure4.cpp", "airwindows/Pressure4/Pressure4Proc.cpp",
+        "airwindows/Tape/Tape.h", "airwindows/Tape/Tape.cpp", "airwindows/Tape/TapeProc.cpp",
+        "airwindows/Tremolo/Tremolo.h", "airwindows/Tremolo/Tremolo.cpp", "airwindows/Tremolo/TremoloProc.cpp"
+      ]
+    }
   ],
   "export": {
     "exclude": [".github", ".pio", "test", "scripts", "platformio.ini", "Makefile"]
