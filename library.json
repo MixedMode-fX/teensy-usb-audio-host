@@ -1,0 +1,24 @@
+{
+  "name": "TeensyUSBAudioHost",
+  "version": "0.1.0",
+  "description": "USB Audio Class (UAC1/UAC2) host driver for class-compliant audio interfaces on the Teensy 4.x and 3.6 USB host port, as a USBHost_t36 driver with Teensy Audio Library input and output objects.",
+  "keywords": ["teensy", "usb", "host", "audio", "uac2", "usbhost_t36", "isochronous"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mixedmode-fx/teensy-usb-audio-host.git"
+  },
+  "authors": [
+    { "name": "MixedMode fX", "maintainer": true }
+  ],
+  "license": "MIT",
+  "frameworks": "arduino",
+  "platforms": "teensy",
+  "headers": "USBAudioHost.h",
+  "examples": [
+    { "name": "Passthrough", "base": "examples/Passthrough", "files": ["Passthrough.ino"] },
+    { "name": "RecordToSD", "base": "examples/RecordToSD", "files": ["RecordToSD.ino"] }
+  ],
+  "export": {
+    "exclude": [".github", ".pio", "test", "scripts", "platformio.ini", "Makefile"]
+  }
+}

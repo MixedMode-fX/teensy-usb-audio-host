@@ -1,0 +1,41 @@
+# Developer entry points. Everything runs through the project-local
+# PlatformIO in .venv/, so a clone needs nothing installed beyond python3.
+#
+# One verb per thing a human, an agent or CI does; the verbs call
+# scripts/*.sh so that a hook without make reaches the same commands.
+
+PIO := .venv/bin/pio
+
+.PHONY: help setup checks test build size clean distclean
+
+help:
+	@echo "make setup    - install PlatformIO into .venv/ and pre-fetch the toolchains"
+	@echo "make checks   - the commit gate: native tests and every firmware build (silence = pass)"
+	@echo "make test     - the native unit tests"
+	@echo "make build    - the examples, for the Teensy 4.1 and 3.6"
+	@echo "make size     - memory usage of the Passthrough example on a Teensy 4.1"
+	@echo "make clean    - remove build output"
+
+$(PIO):
+	@scripts/bootstrap.sh
+
+setup:
+	@scripts/bootstrap.sh --warm
+
+checks: $(PIO)
+	bash scripts/checks.sh $(SCOPE)
+
+test: $(PIO)
+	$(PIO) test -e native
+
+build: $(PIO)
+	$(PIO) run -e passthrough_teensy41 -e record_teensy41 -e passthrough_teensy36 -e record_teensy36
+
+size: $(PIO)
+	$(PIO) run -e passthrough_teensy41 -t size
+
+clean: $(PIO)
+	$(PIO) run -t clean
+
+distclean:
+	rm -rf .pio .venv
