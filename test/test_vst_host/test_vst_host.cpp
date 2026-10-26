@@ -7,6 +7,7 @@
 #include "audioeffectx.h"
 #include "vst_host/sample_format.h"
 #include "vst_host/effect.h"
+#include "vst_host/rack.h"
 #include "../../examples/VSTHost/plugins.h"
 
 void setUp() {}
@@ -215,7 +216,7 @@ static void test_empty_slot_is_a_wire()
     TEST_ASSERT_EQUAL_INT(0, effect.numParams());
     char text[VSTEffect::TEXT_LEN];
     effect.effectName(text);
-    TEST_ASSERT_EQUAL_STRING("", text);
+    TEST_ASSERT_EQUAL_STRING("wire", text);
     float l[2] = {0.25f, -0.25f};
     float r[2] = {0.5f, -0.5f};
     float ol[2], orr[2];
@@ -229,6 +230,162 @@ static void test_empty_slot_is_a_wire()
     TEST_ASSERT_TRUE(effect.supported());
     effect.process(in, out, 2);
     TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.125f, ol[0]);
+}
+
+static void test_effect_mix_blends_and_gain_scales()
+{
+    Gain gain(nullptr);  // halves
+    VSTEffect effect(gain);
+    float l[2] = {0.8f, -0.4f};
+    float r[2] = {0.2f, 0.0f};
+    float ol[2], orr[2];
+    float* in[2] = {l, r};
+    float* out[2] = {ol, orr};
+    effect.mix(0.5f);  // half the plug-in's 0.4, half the input's 0.8
+    effect.process(in, out, 2);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.6f, ol[0]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, -0.3f, ol[1]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.15f, orr[0]);
+    effect.gain(2.0f);
+    effect.process(in, out, 2);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 1.2f, ol[0]);
+    effect.mix(0.0f);  // all input, so the gain alone shows
+    effect.process(in, out, 2);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 1.6f, ol[0]);
+    effect.bypass(true);  // the input at the gain, as a wire would be
+    effect.gain(-1.0f);
+    effect.process(in, out, 2);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, -0.8f, ol[0]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, -0.2f, orr[0]);
+    effect.mix(3.0f);
+    effect.gain(100.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 1.0f, effect.mix());
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 8.0f, effect.gain());
+}
+
+/* ------------------------------------------------------------------------- */
+/* A rack                                                                    */
+/* ------------------------------------------------------------------------- */
+
+static const int FRAMES = 4;
+static float rack_in[2][FRAMES] = {{0.8f, -0.4f, 0.2f, 0.0f}, {0.1f, 0.2f, 0.3f, 0.4f}};
+static float rack_a[2][FRAMES];
+static float rack_b[2][FRAMES];
+static float rack_c[2][FRAMES];
+
+// Runs the rack over rack_in and returns the buffer holding the result.
+static float** runRack(VSTRack& rack)
+{
+    static float* current[2];
+    static float* next[2] = {rack_b[0], rack_b[1]};
+    static float* spare[2] = {rack_c[0], rack_c[1]};
+    for (int ch = 0; ch < 2; ch++) {
+        current[ch] = rack_a[ch];
+        memcpy(rack_a[ch], rack_in[ch], sizeof rack_a[ch]);
+    }
+    return rack.process(current, next, spare, FRAMES);
+}
+
+static void test_empty_rack_returns_its_input()
+{
+    VSTRack rack;
+    TEST_ASSERT_EQUAL_INT(0, rack.size());
+    TEST_ASSERT_EQUAL_INT(0, rack.stages());
+    TEST_ASSERT_NULL(rack.slot(0));
+    float** result = runRack(rack);
+    TEST_ASSERT_EQUAL_PTR(rack_a[0], result[0]);
+    TEST_ASSERT_EQUAL_FLOAT_ARRAY(rack_in[0], result[0], FRAMES);
+}
+
+static void test_rack_in_series_multiplies_through()
+{
+    Gain a(nullptr), b(nullptr), c(nullptr);  // each halves
+    VSTRack rack;
+    TEST_ASSERT_NOT_NULL(rack.add(a));
+    TEST_ASSERT_NOT_NULL(rack.add(b));
+    TEST_ASSERT_NOT_NULL(rack.add(c));
+    TEST_ASSERT_EQUAL_INT(3, rack.size());
+    TEST_ASSERT_EQUAL_INT(3, rack.stages());
+    TEST_ASSERT_EQUAL_INT(2, rack.stageOf(2));
+    float** result = runRack(rack);
+    for (int i = 0; i < FRAMES; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(1e-6f, rack_in[0][i] / 8.0f, result[0][i]);
+        TEST_ASSERT_FLOAT_WITHIN(1e-6f, rack_in[1][i] / 8.0f, result[1][i]);
+    }
+}
+
+static void test_rack_in_parallel_sums_at_each_gain()
+{
+    Gain a(nullptr), b(nullptr);
+    VSTRack rack;
+    rack.add(a)->gain(1.0f);          // stage 0: 0.5 x
+    rack.addParallel(b)->gain(0.5f);  //   + 0.25 x
+    rack.addParallel()->gain(0.25f);  //   + 0.25 x, the dry signal
+    TEST_ASSERT_EQUAL_INT(3, rack.size());
+    TEST_ASSERT_EQUAL_INT(1, rack.stages());
+    TEST_ASSERT_EQUAL_INT(0, rack.stageOf(2));
+    float** result = runRack(rack);
+    for (int i = 0; i < FRAMES; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(1e-6f, rack_in[0][i], result[0][i]);
+        TEST_ASSERT_FLOAT_WITHIN(1e-6f, rack_in[1][i], result[1][i]);
+    }
+}
+
+static void test_rack_mixes_series_and_parallel_stages()
+{
+    Gain a(nullptr), b(nullptr), c(nullptr);
+    VSTRack rack;
+    rack.add(a);                      // stage 0: 0.5 x
+    rack.add(b)->gain(2.0f);          // stage 1: 0.5 x at 2, so x...
+    rack.addParallel()->gain(1.0f);   //   ...plus x: 2x of the stage input, x of the rack's
+    rack.add(c)->mix(0.5f);           // stage 2: half of 0.5 x and half of x: 0.75 x
+    TEST_ASSERT_EQUAL_INT(3, rack.stages());
+    TEST_ASSERT_EQUAL_INT(1, rack.stageOf(1));
+    TEST_ASSERT_EQUAL_INT(1, rack.stageOf(2));
+    TEST_ASSERT_EQUAL_INT(2, rack.stageOf(3));
+    float** result = runRack(rack);
+    for (int i = 0; i < FRAMES; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(1e-6f, rack_in[0][i] * 0.75f, result[0][i]);
+        TEST_ASSERT_FLOAT_WITHIN(1e-6f, rack_in[1][i] * 0.75f, result[1][i]);
+    }
+}
+
+static void test_rack_is_full_at_its_limit_and_tells_plugins_the_rate()
+{
+    Gain plugins[VSTRack::MAX_SLOTS + 1] = {Gain(nullptr), Gain(nullptr), Gain(nullptr), Gain(nullptr),
+                                            Gain(nullptr), Gain(nullptr), Gain(nullptr), Gain(nullptr),
+                                            Gain(nullptr)};
+    VSTRack rack;
+    rack.sampleRate(48000.0f);
+    for (int n = 0; n < VSTRack::MAX_SLOTS; n++) TEST_ASSERT_NOT_NULL(rack.add(plugins[n]));
+    TEST_ASSERT_NULL(rack.add(plugins[VSTRack::MAX_SLOTS]));
+    TEST_ASSERT_EQUAL_INT(VSTRack::MAX_SLOTS, rack.size());
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 48000.0f, plugins[0].getSampleRate());
+    rack.sampleRate(96000.0f);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 96000.0f, plugins[VSTRack::MAX_SLOTS - 1].getSampleRate());
+}
+
+static uint32_t fake_clock_ticks = 0;
+static uint32_t fakeClock()
+{
+    fake_clock_ticks += 10;
+    return fake_clock_ticks;
+}
+
+static void test_rack_times_each_slot_with_the_clock_it_is_given()
+{
+    Gain a(nullptr), b(nullptr);
+    VSTRack rack;
+    rack.add(a);
+    rack.add(b);
+    runRack(rack);
+    TEST_ASSERT_EQUAL_UINT32(0, rack.cycles(0));
+    rack.clock(fakeClock);
+    runRack(rack);
+    TEST_ASSERT_EQUAL_UINT32(10, rack.cycles(0));
+    TEST_ASSERT_EQUAL_UINT32(10, rack.cycles(1));
+    TEST_ASSERT_EQUAL_UINT32(10, rack.cyclesMax(1));
+    TEST_ASSERT_EQUAL_UINT32(0, rack.cycles(2));
 }
 
 /* ------------------------------------------------------------------------- */
@@ -346,6 +503,13 @@ int main()
     RUN_TEST(test_effect_processes_or_passes_through);
     RUN_TEST(test_effect_passes_an_unsupported_plugin_through);
     RUN_TEST(test_empty_slot_is_a_wire);
+    RUN_TEST(test_effect_mix_blends_and_gain_scales);
+    RUN_TEST(test_empty_rack_returns_its_input);
+    RUN_TEST(test_rack_in_series_multiplies_through);
+    RUN_TEST(test_rack_in_parallel_sums_at_each_gain);
+    RUN_TEST(test_rack_mixes_series_and_parallel_stages);
+    RUN_TEST(test_rack_is_full_at_its_limit_and_tells_plugins_the_rate);
+    RUN_TEST(test_rack_times_each_slot_with_the_clock_it_is_given);
     RUN_TEST(test_airwindows_plugins_construct_and_identify);
     RUN_TEST(test_capacitor_dry_passes_the_signal_through);
     RUN_TEST(test_capacitor_shut_lowpass_removes_the_tone);

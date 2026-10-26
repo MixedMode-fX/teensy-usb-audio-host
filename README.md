@@ -115,7 +115,7 @@ lists its keys at the top and `s` prints the status everywhere.
 | `StereoDelay` | A ping-pong delay: each side's repeats feed the other side's line. Time, feedback and mix.              |
 | `Overdrive`   | A pedal chain per channel: drive, a soft-clipping waveshaper, a tone low-pass, a bit crusher, level.    |
 | `Modulation`  | The Audio Library's chorus and flanger side by side, with a mixer choosing which one reaches the output. |
-| `VSTHost`     | Five Airwindows plug-ins in one chain object, compiled in from their unmodified sources; parameters by line. |
+| `VSTHost`     | Five Airwindows plug-ins in one rack object, in series and in parallel, from their unmodified sources.      |
 
 They all ask the interface for 44.1 kHz because the Audio Library's effects
 assume it; the graph runs at whatever rate the interface ends up streaming,
@@ -141,8 +141,10 @@ AudioConnection c3(chain, 0, out, 0);
 AudioConnection c4(chain, 1, out, 1);
 
 void setup() {
-    chain.add(capacitor);                            // in signal order
-    chain.add(tape);
+    chain.add(capacitor);                            // stage 0
+    chain.add(pressure)->gain(0.7f);                 // stage 1: the compressed signal...
+    chain.addParallel()->gain(0.5f);                 //   ...summed with the dry one
+    chain.add(tape)->mix(0.5f);                      // stage 2, half wet
     chain.slot(0)->setParameter(0, 0.5f);            // 0..1, as VST parameters are
     chain.slot(1)->bypass(true);
     chain.printParameters(Serial);                   // names, values, displays
@@ -150,16 +152,24 @@ void setup() {
 }
 ```
 
-The chain converts the Audio Library's 16-bit blocks to float once, runs
-every slot in order on the float buffers, and converts back once, so a
-row of plug-ins costs one round trip through 16 bits rather than one per
-plug-in, and one update rather than one per object. It measures each
-slot's processor use with the cycle counter (`processorUsageMax(n)`). A
-single plug-in that sits between other Audio Library objects is
+The chain is a rack of stages. `add()` starts a stage after the last;
+`addParallel()` joins the last stage, and every slot in a stage reads the
+stage's input and is summed into its output at the slot's `gain()`. A slot
+added with no plug-in is a wire, which is how the dry signal joins a sum.
+Each slot's `mix()` blends the plug-in's output with its input, whether or
+not the plug-in has a dry/wet of its own. The chain converts the Audio
+Library's 16-bit blocks to float once, runs every stage on the float
+buffers, and converts back once, so a rack of plug-ins costs one round
+trip through 16 bits rather than one per plug-in, and one update rather
+than one per object. It measures each slot's processor use with the cycle
+counter (`processorUsageMax(n)`).
+
+A single plug-in that sits between other Audio Library objects is
 `AudioEffectVST<P>`, which owns its plug-in and has the same controls
-(`filter.setParameter(0, 0.5f)`, `filter.bypass(true)`); the controls of
-either are `VSTEffect` (`src/vst_host/effect.h`), which the chain's slots
-are.
+(`filter.setParameter(0, 0.5f)`, `filter.mix(0.5f)`, `filter.bypass(true)`).
+The controls of either are `VSTEffect` (`src/vst_host/effect.h`), which
+the chain's slots are, and the routing is `VSTRack` (`src/vst_host/rack.h`);
+both are framework-free and covered by the native tests.
 
 A plug-in binary from a computer cannot be loaded on a microcontroller:
 there is no operating system, no dynamic loader and the wrong processor.

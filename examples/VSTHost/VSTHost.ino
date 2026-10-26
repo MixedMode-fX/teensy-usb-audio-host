@@ -1,6 +1,6 @@
 // A VST-style effect host: five of the open-source Airwindows plug-ins,
 // compiled into the sketch unmodified against the library's audioeffectx.h,
-// run as a chain between the inputs and outputs of a class-compliant USB
+// run as a rack between the inputs and outputs of a class-compliant USB
 // audio interface on the Teensy's host port. The serial monitor is the
 // rack's front panel.
 //
@@ -9,10 +9,16 @@
 // exactly the interface this host provides. plugins.h is where they are
 // listed; airwindows/README.md says where they come from.
 //
-// The chain is one Audio Library object: the audio is converted to float
-// once, goes through every plug-in in float, and comes back to 16 bits
-// once. (AudioEffectVST<P> is the same for a single plug-in that sits
-// between other Audio Library objects.)
+// The rack is one Audio Library object: the audio is converted to float
+// once, goes through every stage in float, and comes back to 16 bits once.
+// Stages run in series; the slots within a stage run in parallel on the
+// same input and are summed, each at its gain. The rack here:
+//
+//   stage 0  Capacitor                          a filter
+//   stage 1  Density, half wet                  saturation, blended with its input
+//   stage 2  Pressure4 at 0.7 + a wire at 0.5   parallel compression
+//   stage 3  Tape                               tape saturation
+//   stage 4  Tremolo                            depth off until asked for
 //
 // Wiring: the interface into the host port (see the Passthrough example).
 //
@@ -21,10 +27,12 @@
 // double-precision FPU: one plug-in exceeds its processor.
 //
 // Serial monitor, one command per line:
-//   l                list the plug-ins and their parameters
-//   p <n> <i> <v>    set parameter i of plug-in n to v (0 to 1)
-//   b <n>            bypass plug-in n, or bring it back
-//   s                stream status and processor use per plug-in
+//   l                list the slots, their stages and their parameters
+//   p <n> <i> <v>    set parameter i of slot n to v (0 to 1)
+//   m <n> <v>        slot n's mix: 1 all plug-in, 0 all input
+//   g <n> <v>        slot n's gain, its weight in its stage's sum
+//   b <n>            bypass slot n, or bring it back
+//   s                stream status and processor use per slot
 
 #include <Audio.h>
 #include <USBHost_t36.h>
@@ -82,8 +90,19 @@ static void printStatus()
 static VSTEffect* slotAt(long n)
 {
     VSTEffect* slot = chain.slot(n);
-    if (!slot) Serial.println("no such plug-in; l lists them");
+    if (!slot) Serial.println("no such slot; l lists them");
     return slot;
+}
+
+static void printSlotLine(VSTEffect* slot, const char* what, float value)
+{
+    char text[VSTEffect::TEXT_LEN];
+    slot->effectName(text);
+    Serial.print(text);
+    Serial.print(' ');
+    Serial.print(what);
+    Serial.print(' ');
+    Serial.println(value, 2);
 }
 
 static void handleLine(char* s)
@@ -113,6 +132,18 @@ static void handleLine(char* s)
         slot->parameterLabel(i, text);
         Serial.print(' ');
         Serial.println(text);
+    } else if (command == 'm' || command == 'g') {
+        const long n = strtol(p, &p, 10);
+        const float v = strtof(p, &p);
+        VSTEffect* slot = slotAt(n);
+        if (!slot) return;
+        if (command == 'm') {
+            slot->mix(v);
+            printSlotLine(slot, "mix", slot->mix());
+        } else {
+            slot->gain(v);
+            printSlotLine(slot, "gain", slot->gain());
+        }
     } else if (command == 'b') {
         VSTEffect* slot = slotAt(strtol(p, &p, 10));
         if (!slot) return;
@@ -124,7 +155,7 @@ static void handleLine(char* s)
     } else if (command == 's') {
         printStatus();
     } else if (command != 0) {
-        Serial.println("commands: l, p <n> <i> <v>, b <n>, s");
+        Serial.println("commands: l, p <n> <i> <v>, m <n> <v>, g <n> <v>, b <n>, s");
     }
 }
 
@@ -149,22 +180,24 @@ void setup()
     interface.setSampleRate(44100);
     interface.setChannels(2, 2);
 
-    // The rack, in signal order.
-    chain.add(capacitor);
-    chain.add(density);
-    chain.add(pressure);
-    chain.add(tape);
-    chain.add(tremolo);
-    // Airwindows parameters are 0..1 and start where the plug-in's author
-    // left them, which is mostly transparent. A little of each, to hear:
-    chain.slot(1)->setParameter(0, 0.4f);  // Density: some saturation
-    chain.slot(2)->setParameter(0, 0.3f);  // Pressure4: a touch of compression
-    chain.slot(4)->setParameter(1, 0.0f);  // Tremolo: depth off until asked for
+    // The rack, in signal order. Airwindows parameters are 0..1 and start
+    // where the plug-in's author left them, which is mostly transparent;
+    // a little of each, to hear.
+    chain.add(capacitor);                                   // 0
+    VSTEffect* saturation = chain.add(density);             // 1
+    saturation->setParameter(0, 0.4f);                      //    some saturation...
+    saturation->mix(0.5f);                                  //    ...blended half and half
+    VSTEffect* compressed = chain.add(pressure);            // 2
+    compressed->setParameter(0, 0.5f);                      //    squashed hard...
+    compressed->gain(0.7f);
+    chain.addParallel()->gain(0.5f);                        // 3  ...next to the dry signal
+    chain.add(tape);                                        // 4
+    chain.add(tremolo)->setParameter(1, 0.0f);              // 5  depth off until asked for
 
     usb.begin();
     in.begin();
     out.begin();
-    Serial.println("VST host: l lists the rack, p <plug-in> <parameter> <0..1> sets, b <plug-in> bypasses");
+    Serial.println("VST host: l lists the rack; p/m/g/b set a slot's parameter, mix, gain, bypass");
 }
 
 void loop()

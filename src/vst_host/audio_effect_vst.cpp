@@ -5,11 +5,13 @@
 
 static const int CHANNELS = VSTEffect::MAX_CHANNELS;
 
-// Two blocks of float buffers, one block each way, or the two sides of a
-// chain's ping-pong. Updates run one at a time in the Audio Library's
-// software interrupt, so every host object can share them.
+// Three blocks of float buffers: a block each way for one plug-in, or the
+// input, output and parallel sum of a rack's stage. Updates run one at a
+// time in the Audio Library's software interrupt, so every host object can
+// share them.
 static float scratch_a[CHANNELS][AUDIO_BLOCK_SAMPLES];
 static float scratch_b[CHANNELS][AUDIO_BLOCK_SAMPLES];
+static float scratch_c[CHANNELS][AUDIO_BLOCK_SAMPLES];
 
 static unsigned char clampInputs(const AudioEffectX& plugin)
 {
@@ -30,13 +32,25 @@ static void blocksToFloat(audio_block_t* const* in, float** out)
     }
 }
 
-static void printEffect(Print& out, VSTEffect& effect)
+static void printEffect(Print& out, VSTEffect& effect, int stage)
 {
     char text[VSTEffect::TEXT_LEN];
     effect.effectName(text);
     out.print(text);
-    out.print(effect.bypassed() ? " (bypassed)" : "");
-    if (!effect.supported()) out.print(" (unsupported channel count, passed through)");
+    if (effect.bypassed()) out.print(" (bypassed)");
+    if (!effect.empty() && !effect.supported()) out.print(" (unsupported channel count, passed through)");
+    if (stage >= 0) {
+        out.print("  stage ");
+        out.print(stage);
+    }
+    if (effect.gain() != 1.0f) {
+        out.print("  gain ");
+        out.print(effect.gain(), 2);
+    }
+    if (effect.mix() != 1.0f) {
+        out.print("  mix ");
+        out.print(effect.mix(), 2);
+    }
     out.println();
     for (int i = 0; i < effect.numParams(); i++) {
         out.print("  [");
@@ -68,6 +82,11 @@ static float percentOfProcessor(uint32_t cycles)
     return static_cast<float>(cycles) * (AUDIO_SAMPLE_RATE_EXACT / AUDIO_BLOCK_SAMPLES) * 100.0f / clock;
 }
 
+static uint32_t readCycleCounter()
+{
+    return ARM_DWT_CYCCNT;
+}
+
 /* ------------------------------------------------------------------------- */
 /* One plug-in                                                               */
 /* ------------------------------------------------------------------------- */
@@ -82,7 +101,7 @@ AudioEffectVSTHost::AudioEffectVSTHost(AudioEffectX& plugin)
 
 void AudioEffectVSTHost::printParameters(Print& out)
 {
-    printEffect(out, *this);
+    printEffect(out, *this, -1);
 }
 
 void AudioEffectVSTHost::update(void)
@@ -121,53 +140,32 @@ void AudioEffectVSTHost::update(void)
 }
 
 /* ------------------------------------------------------------------------- */
-/* A chain                                                                   */
+/* A rack                                                                    */
 /* ------------------------------------------------------------------------- */
 
-AudioEffectVSTChain::AudioEffectVSTChain()
-    : AudioStream(CHANNELS, inputQueue_), slots_(), size_(0), inputQueue_(), cycles_(), cycles_max_()
+AudioEffectVSTChain::AudioEffectVSTChain() : AudioStream(CHANNELS, inputQueue_), VSTRack(), inputQueue_()
 {
-}
-
-VSTEffect* AudioEffectVSTChain::add(AudioEffectX& plugin)
-{
-    if (size_ >= MAX_SLOTS) return nullptr;
-    VSTEffect& slot = slots_[size_];
-    slot.attach(plugin);
-    plugin.setSampleRate(AUDIO_SAMPLE_RATE_EXACT);
-    plugin.setBlockSize(AUDIO_BLOCK_SAMPLES);
-    plugin.resume();
-    // The slot is complete before the audio interrupt can see it.
-    size_ = size_ + 1;
-    return &slot;
-}
-
-void AudioEffectVSTChain::sampleRate(float hz)
-{
-    for (int n = 0; n < size_; n++) slots_[n].sampleRate(hz);
+    sampleRate(AUDIO_SAMPLE_RATE_EXACT);
+    blockSize(AUDIO_BLOCK_SAMPLES);
+    clock(readCycleCounter);
 }
 
 float AudioEffectVSTChain::processorUsage(int n) const
 {
-    return n >= 0 && n < size_ ? percentOfProcessor(cycles_[n]) : 0.0f;
+    return percentOfProcessor(cycles(n));
 }
 
 float AudioEffectVSTChain::processorUsageMax(int n) const
 {
-    return n >= 0 && n < size_ ? percentOfProcessor(cycles_max_[n]) : 0.0f;
-}
-
-void AudioEffectVSTChain::processorUsageMaxReset()
-{
-    for (int n = 0; n < MAX_SLOTS; n++) cycles_max_[n] = cycles_[n];
+    return percentOfProcessor(cyclesMax(n));
 }
 
 void AudioEffectVSTChain::printParameters(Print& out)
 {
-    for (int n = 0; n < size_; n++) {
+    for (int n = 0; n < size(); n++) {
         out.print(n);
         out.print(": ");
-        printEffect(out, slots_[n]);
+        printEffect(out, *slot(n), stageOf(n));
     }
 }
 
@@ -176,8 +174,7 @@ void AudioEffectVSTChain::update(void)
     audio_block_t* in[CHANNELS];
     for (int ch = 0; ch < CHANNELS; ch++) in[ch] = receiveReadOnly(ch);
 
-    const int count = size_;
-    if (count == 0) {
+    if (size() == 0) {
         for (int ch = 0; ch < CHANNELS; ch++) {
             if (!in[ch]) continue;
             transmit(in[ch], ch);
@@ -186,34 +183,25 @@ void AudioEffectVSTChain::update(void)
         return;
     }
 
-    float* ping[CHANNELS];
-    float* pong[CHANNELS];
+    float* current[CHANNELS];
+    float* next[CHANNELS];
+    float* spare[CHANNELS];
     for (int ch = 0; ch < CHANNELS; ch++) {
-        ping[ch] = scratch_a[ch];
-        pong[ch] = scratch_b[ch];
+        current[ch] = scratch_a[ch];
+        next[ch] = scratch_b[ch];
+        spare[ch] = scratch_c[ch];
     }
-    float** current = ping;
-    float** next = pong;
     blocksToFloat(in, current);
     for (int ch = 0; ch < CHANNELS; ch++) {
         if (in[ch]) release(in[ch]);
     }
 
-    for (int n = 0; n < count; n++) {
-        const uint32_t start = ARM_DWT_CYCCNT;
-        slots_[n].process(current, next, AUDIO_BLOCK_SAMPLES);
-        const uint32_t cycles = ARM_DWT_CYCCNT - start;
-        cycles_[n] = cycles;
-        if (cycles > cycles_max_[n]) cycles_max_[n] = cycles;
-        float** done = next;
-        next = current;
-        current = done;
-    }
+    float** result = process(current, next, spare, AUDIO_BLOCK_SAMPLES);
 
     for (int ch = 0; ch < CHANNELS; ch++) {
         audio_block_t* block = allocate();
         if (!block) return;
-        vst_host::toInt16(current[ch], block->data, AUDIO_BLOCK_SAMPLES);
+        vst_host::toInt16(result[ch], block->data, AUDIO_BLOCK_SAMPLES);
         transmit(block, ch);
         release(block);
     }

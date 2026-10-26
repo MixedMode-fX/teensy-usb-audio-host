@@ -20,7 +20,13 @@
 // Parameters are 0..1 floats, set from loop() and read by the plug-in at the
 // start of each block it processes; a float store is one instruction, so no
 // locking is needed. A plug-in declaring more channels than MAX_CHANNELS is
-// passed through unprocessed and says so in supported().
+// passed through unprocessed and says so in supported(). An effect with no
+// plug-in is a wire.
+//
+// Two controls of the host's own sit after the plug-in: mix() blends the
+// plug-in's output with its input (1 is all plug-in, 0 all input), and
+// gain() scales the result, which is the effect's weight when a chain sums
+// it with others in parallel.
 class VSTEffect {
 public:
     static const int MAX_CHANNELS = VST_HOST_MAX_CHANNELS;
@@ -28,8 +34,8 @@ public:
     // have been seen to write a product-length string as their name.
     static const int TEXT_LEN = kVstMaxProductStrLen + 1;
 
-    VSTEffect() : plugin_(nullptr), bypass_(false) {}
-    explicit VSTEffect(AudioEffectX& plugin) : plugin_(&plugin), bypass_(false) {}
+    VSTEffect() : plugin_(nullptr), bypass_(false), mix_(1.0f), gain_(1.0f) {}
+    explicit VSTEffect(AudioEffectX& plugin) : plugin_(&plugin), bypass_(false), mix_(1.0f), gain_(1.0f) {}
     VSTEffect(const VSTEffect&) = delete;
     VSTEffect& operator=(const VSTEffect&) = delete;
 
@@ -49,6 +55,11 @@ public:
 
     void bypass(bool on) { bypass_ = on; }
     bool bypassed() const { return bypass_; }
+
+    void mix(float wet) { mix_ = wet < 0.0f ? 0.0f : (wet > 1.0f ? 1.0f : wet); }
+    float mix() const { return mix_; }
+    void gain(float level) { gain_ = level < -MAX_GAIN ? -MAX_GAIN : (level > MAX_GAIN ? MAX_GAIN : level); }
+    float gain() const { return gain_; }
 
     int numParams() const { return plugin_ ? plugin_->getNumParams() : 0; }
     void setParameter(int index, float value)
@@ -78,25 +89,46 @@ public:
     {
         text[0] = 0;
         if (plugin_) plugin_->getEffectName(text);
+        else vst_strncpy(text, "wire", kVstMaxEffectNameLen);
     }
 
     // Runs the plug-in over MAX_CHANNELS buffers of frames each, in to out,
-    // which must be distinct. Bypassed, unsupported or empty, it copies in
-    // to out instead; a plug-in with fewer outputs leaves silence in the
-    // rest.
+    // which must be distinct, then applies mix() and gain(). Bypassed,
+    // unsupported or a wire, the plug-in's output is its input; a plug-in
+    // with fewer outputs leaves silence in the rest.
     void process(float** in, float** out, int frames)
     {
+        const float wet = mix_;
+        const float level = gain_;
         if (bypass_ || !supported()) {
-            for (int ch = 0; ch < MAX_CHANNELS; ch++) memcpy(out[ch], in[ch], frames * sizeof(float));
+            for (int ch = 0; ch < MAX_CHANNELS; ch++) scale(in[ch], out[ch], level, frames);
             return;
         }
         plugin_->processReplacing(in, out, frames);
         for (int ch = plugin_->getNumOutputs(); ch < MAX_CHANNELS; ch++) vst_host::silence(out[ch], frames);
+        if (wet == 1.0f && level == 1.0f) return;
+        const float dry = 1.0f - wet;
+        for (int ch = 0; ch < MAX_CHANNELS; ch++) {
+            for (int i = 0; i < frames; i++) out[ch][i] = level * (wet * out[ch][i] + dry * in[ch][i]);
+        }
     }
 
 private:
+    static const int MAX_GAIN = 8;
+
+    static void scale(const float* in, float* out, float level, int frames)
+    {
+        if (level == 1.0f) {
+            memcpy(out, in, frames * sizeof(float));
+            return;
+        }
+        for (int i = 0; i < frames; i++) out[i] = level * in[i];
+    }
+
     AudioEffectX* plugin_;
     volatile bool bypass_;
+    volatile float mix_;
+    volatile float gain_;
 };
 
 #endif
