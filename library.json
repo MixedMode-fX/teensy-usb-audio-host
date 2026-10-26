@@ -33,6 +33,15 @@
         "airwindows/Tape/Tape.h", "airwindows/Tape/Tape.cpp", "airwindows/Tape/TapeProc.cpp",
         "airwindows/Tremolo/Tremolo.h", "airwindows/Tremolo/Tremolo.cpp", "airwindows/Tremolo/TremoloProc.cpp"
       ]
+    },
+    {
+      "name": "CumulusReverb",
+      "base": "examples/CumulusReverb",
+      "files": [
+        "CumulusReverb.ino", "cumulus_reverb.h", "cumulus_reverb.cpp", "mutable_reverb.h",
+        "clouds/README.md", "clouds/dsp/frame.h", "clouds/dsp/fx/fx_engine.h", "clouds/dsp/fx/reverb.h",
+        "stmlib/LICENSE", "stmlib/stmlib.h", "stmlib/dsp/dsp.h", "stmlib/dsp/cosine_oscillator.h"
+      ]
     }
   ],
   "export": {
