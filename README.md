@@ -119,6 +119,7 @@ lists its keys at the top and `s` prints the status everywhere.
 | `Modulation`  | The Audio Library's chorus and flanger side by side, with a mixer choosing which one reaches the output. |
 | `VSTHost`     | Five Airwindows plug-ins in one rack object, in series and in parallel, from their unmodified sources.      |
 | `VSTHostMIDI` | The `VSTHost` rack played from a USB MIDI controller on a hub beside the interface: CCs mapped to plug-in parameters, mix, gain and bypass, with MIDI learn. |
+| `LineCheck`   | Bring-up for a new interface: silence, a test tone or the inputs on the outputs, and the input peaks, to tell a bad output from a bad input. |
 | `CumulusReverb` | The reverb of Mutable Instruments' Clouds, from its unmodified sources, as a plug-in played from a USB MIDI controller: amount, time, diffusion, tone and input on CCs, bypass and clear on buttons, with MIDI learn. |
 
 They all ask the interface for 44.1 kHz because the Audio Library's effects
@@ -245,6 +246,10 @@ make test      # the native unit tests, no hardware
 make build     # every example, for the Teensy 4.1 and 3.6
 make size      # memory usage on a Teensy 4.1
 ```
+
+On Windows, use GNU Make with Git for Windows Bash (`bash`) available on
+`PATH`. The Makefile uses the Windows venv executable and Bash to run the
+project scripts, normalizing their line endings before execution.
 
 `scripts/checks.sh` is the one list of checks; the Makefile, CI and the
 Claude commit hook all run it. Sources build with `-Wall -Wextra -Weffc++

@@ -50,7 +50,7 @@ fi
 if has firmware; then
   # Every example, for every board. The Makefile's build target has the same list.
   envs=()
-  for example in passthrough record reverb delay overdrive modulation vsthost vstmidi cumulus; do
+  for example in passthrough linecheck record reverb delay overdrive modulation vsthost vstmidi cumulus; do
     envs+=(-e "${example}_teensy41" -e "${example}_teensy36")
   done
   run "firmware builds" "$pio" run "${envs[@]}"

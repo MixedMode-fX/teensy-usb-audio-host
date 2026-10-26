@@ -2,7 +2,7 @@
 #
 # Provision the PlatformIO toolchain into .venv/ at the repository root.
 #
-# Safe to re-run: an existing venv is reused and packages are only upgraded.
+# Safe to re-run: a working venv is reused and packages are only upgraded.
 # Pass --warm to also download the Teensy platform and the native test
 # platform up front, which is what makes the first build fast in a fresh
 # container.
@@ -11,8 +11,20 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-if [ ! -x .venv/bin/python ]; then
-    python3 -m venv .venv
+# uv when it is installed: it uses a Python it already has in this range, or
+# fetches one, so a machine needs nothing else. Without it, the system python3
+# and pip, which is what a container or CI has.
+PYTHON_VERSION='>=3.11,<3.14'
+
+# Run the interpreter rather than test for the file: a venv made by another
+# OS (WSL's, seen from Windows) leaves a bin/python that links to nothing.
+if ! .venv/bin/python -c '' >/dev/null 2>&1; then
+    rm -rf .venv
+    if command -v uv >/dev/null; then
+        uv venv --quiet --python "$PYTHON_VERSION" .venv
+    else
+        python3 -m venv .venv
+    fi
 fi
 
 # Python on Windows puts the venv's executables in Scripts/, not bin/. A
@@ -21,15 +33,17 @@ if [ -d .venv/Scripts ] && [ ! -e .venv/bin ]; then
     cmd //c mklink //J "$(cygpath -w .venv/bin)" "$(cygpath -w .venv/Scripts)" >/dev/null
 fi
 
-# A venv can exist with no pip in it: a container image that ships a
-# half-built one, or `python3 -m venv` on a system whose ensurepip is a
-# separate package. The interpreter is there, so the guard above is happy, and
-# the first install then dies on "No module named pip". Repair it here rather
-# than making every caller recognise that message.
-.venv/bin/python -m pip --version >/dev/null 2>&1 || .venv/bin/python -m ensurepip --upgrade
-
-.venv/bin/python -m pip install --quiet --upgrade pip
-.venv/bin/python -m pip install --quiet --upgrade platformio
+if command -v uv >/dev/null; then
+    uv pip install --quiet --python .venv --upgrade platformio
+else
+    # A venv can exist with no pip in it: a container image that ships a
+    # half-built one, or `python3 -m venv` on a system whose ensurepip is a
+    # separate package. Repair it here rather than making every caller
+    # recognise "No module named pip".
+    .venv/bin/python -m pip --version >/dev/null 2>&1 || .venv/bin/python -m ensurepip --upgrade
+    .venv/bin/python -m pip install --quiet --upgrade pip
+    .venv/bin/python -m pip install --quiet --upgrade platformio
+fi
 
 if [ "${1:-}" = "--warm" ]; then
     # Roughly 600 MB of toolchain. Not fatal if the network is unavailable:

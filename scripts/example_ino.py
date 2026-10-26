@@ -22,8 +22,11 @@ if example:
     out_dir = os.path.join(project_dir, ".pio", "examples", name)
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, name + ".cpp")
+    # A #line path is a string literal, so Windows backslashes would read as
+    # escapes; forward slashes work on every host.
+    line_path = sketch.replace("\\", "/")
     with open(sketch) as f:
-        content = '#include <Arduino.h>\n#line 1 "%s"\n%s' % (sketch, f.read())
+        content = '#include <Arduino.h>\n#line 1 "%s"\n%s' % (line_path, f.read())
     current = open(out).read() if os.path.exists(out) else None
     if current != content:
         with open(out, "w") as f:

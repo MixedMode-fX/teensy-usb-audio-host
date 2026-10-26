@@ -28,7 +28,10 @@ AudioConnection c2(in, 1, filterR, 0);
 AudioConnection c3(filterL, 0, out, 0);
 AudioConnection c4(filterR, 0, out, 1);
 
-static float cutoff = 20000.0f;
+// The state-variable filter turns unstable and sits at full scale near the
+// top of its range at the default resonance, so the sweep stops well below.
+static const float MAX_CUTOFF = 10000.0f;
+static float cutoff = MAX_CUTOFF;
 static USBAudioDevice::State shown = USBAudioDevice::State::Idle;
 
 void setup()
@@ -60,7 +63,7 @@ void loop()
     while (Serial.available()) {
         const int key = Serial.read();
         if (key == 'f' && cutoff > 100.0f) cutoff *= 0.8f;
-        if (key == 'g' && cutoff < 20000.0f) cutoff *= 1.25f;
+        if (key == 'g' && cutoff < MAX_CUTOFF) cutoff *= 1.25f;
         if (key == 'f' || key == 'g') {
             filterL.frequency(cutoff);
             filterR.frequency(cutoff);
