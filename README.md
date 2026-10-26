@@ -246,6 +246,22 @@ make build     # every example, for the Teensy 4.1 and 3.6
 make size      # memory usage on a Teensy 4.1
 ```
 
+To put an example on a unit and watch it, name the example and the board
+(`make help` lists both); `PORT` is needed only when more than one Teensy is
+plugged in (`make ports` lists them):
+
+```
+make flash EXAMPLE=reverb BOARD=teensy36             # build and upload
+make monitor EXAMPLE=reverb BOARD=teensy36           # the serial monitor, Ctrl+C to quit
+make flash-monitor EXAMPLE=reverb PORT=/dev/ttyACM0  # both, the monitor waiting for the reboot
+make udev                                            # Linux, once per machine: PlatformIO's udev rules
+```
+
+The defaults are `EXAMPLE=passthrough BOARD=teensy41`. The upload reboots a
+Teensy running a `USB_SERIAL` sketch into its bootloader by software; a blank
+one, or one running a sketch without USB serial, needs its program button
+pressed once.
+
 `scripts/checks.sh` is the one list of checks; the Makefile, CI and the
 Claude commit hook all run it. Sources build with `-Wall -Wextra -Weffc++
 -Wshadow -Werror`; the core and its libraries are passed as `-isystem`
