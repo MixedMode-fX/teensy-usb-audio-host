@@ -115,7 +115,7 @@ lists its keys at the top and `s` prints the status everywhere.
 | `StereoDelay` | A ping-pong delay: each side's repeats feed the other side's line. Time, feedback and mix.              |
 | `Overdrive`   | A pedal chain per channel: drive, a soft-clipping waveshaper, a tone low-pass, a bit crusher, level.    |
 | `Modulation`  | The Audio Library's chorus and flanger side by side, with a mixer choosing which one reaches the output. |
-| `VSTHost`     | Five Airwindows plug-ins in a chain, compiled in from their unmodified sources; parameters by line.      |
+| `VSTHost`     | Five Airwindows plug-ins in one chain object, compiled in from their unmodified sources; parameters by line. |
 
 They all ask the interface for 44.1 kHz because the Audio Library's effects
 assume it; the graph runs at whatever rate the interface ends up streaming,
@@ -125,23 +125,41 @@ live; the rest need 40 blocks.
 
 ## Hosting VST-style effect plug-ins
 
-`AudioEffectVST.h` runs an effect written to the VST 2.x plug-in interface
-as an Audio Library object:
+`AudioEffectVST.h` runs effects written to the VST 2.x plug-in interface
+as Audio Library objects. A chain of them is one object:
 
 ```cpp
 #include <AudioEffectVST.h>
 #include "plugins.h"                                 // the plug-ins the sketch carries
 
-AudioEffectVST<airwindows::capacitor::Capacitor> filter;   // owns the plug-in
-AudioConnection c1(in, 0, filter, 0);
-AudioConnection c2(in, 1, filter, 1);
-AudioConnection c3(filter, 0, out, 0);
-AudioConnection c4(filter, 1, out, 1);
+VSTPlugin<airwindows::capacitor::Capacitor> capacitor;
+VSTPlugin<airwindows::tape::Tape> tape;
+AudioEffectVSTChain chain;
+AudioConnection c1(in, 0, chain, 0);
+AudioConnection c2(in, 1, chain, 1);
+AudioConnection c3(chain, 0, out, 0);
+AudioConnection c4(chain, 1, out, 1);
 
-filter.setParameter(0, 0.5f);                        // 0..1, as VST parameters are
-filter.printParameters(Serial);                      // names, values, displays
-filter.bypass(true);
+void setup() {
+    chain.add(capacitor);                            // in signal order
+    chain.add(tape);
+    chain.slot(0)->setParameter(0, 0.5f);            // 0..1, as VST parameters are
+    chain.slot(1)->bypass(true);
+    chain.printParameters(Serial);                   // names, values, displays
+    ...
+}
 ```
+
+The chain converts the Audio Library's 16-bit blocks to float once, runs
+every slot in order on the float buffers, and converts back once, so a
+row of plug-ins costs one round trip through 16 bits rather than one per
+plug-in, and one update rather than one per object. It measures each
+slot's processor use with the cycle counter (`processorUsageMax(n)`). A
+single plug-in that sits between other Audio Library objects is
+`AudioEffectVST<P>`, which owns its plug-in and has the same controls
+(`filter.setParameter(0, 0.5f)`, `filter.bypass(true)`); the controls of
+either are `VSTEffect` (`src/vst_host/effect.h`), which the chain's slots
+are.
 
 A plug-in binary from a computer cannot be loaded on a microcontroller:
 there is no operating system, no dynamic loader and the wrong processor.
@@ -157,16 +175,15 @@ plug-ins, each in a namespace of its own, since every Airwindows header
 names its parameters `kParamA..` at file scope. To add one, copy its three
 files next to the others and add a namespace block.
 
-`AudioEffectVST<P>` constructs the plug-in and converts the Audio Library's
-16-bit blocks to the float buffers its `processReplacing()` wants and back,
-clipping at full scale. Stereo in and out is what the host carries, which is
-what every Airwindows plug-in is. Parameters are set from `loop()` and read
-by the plug-in at the start of each block, so no locking is involved. The
-plug-in is told the Audio Library's nominal rate; tell it the interface's
-actual one with `sampleRate()` once streaming, as the example does. A native
-test suite (`test/test_vst_host`) compiles the example's plug-ins on the
-host machine and runs them, so the interface stand-in is checked against the
-real code without a Teensy.
+The float buffers are what a plug-in's `processReplacing()` wants; the way
+back clips at full scale. Stereo in and out is what the host carries, which
+is what every Airwindows plug-in is. Parameters are set from `loop()` and
+read by the plug-in at the start of each block, so no locking is involved.
+Every plug-in is told the Audio Library's nominal rate; tell it the
+interface's actual one with `sampleRate()` once streaming, as the example
+does. A native test suite (`test/test_vst_host`) compiles the example's
+plug-ins on the host machine and runs them, so the interface stand-in is
+checked against the real code without a Teensy.
 
 The sources need two accommodations, both in `audioeffectx.h` and explained
 there: it includes the standard headers a plug-in includes after it, so that

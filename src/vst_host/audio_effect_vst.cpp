@@ -3,89 +3,53 @@
 #include "vst_host/audio_effect_vst.h"
 #include "vst_host/sample_format.h"
 
-// One block of float buffers each way. Updates run one at a time in the
-// Audio Library's software interrupt, so every host object can share them.
-static float input_scratch[AudioEffectVSTHost::MAX_CHANNELS][AUDIO_BLOCK_SAMPLES];
-static float output_scratch[AudioEffectVSTHost::MAX_CHANNELS][AUDIO_BLOCK_SAMPLES];
+static const int CHANNELS = VSTEffect::MAX_CHANNELS;
+
+// Two blocks of float buffers, one block each way, or the two sides of a
+// chain's ping-pong. Updates run one at a time in the Audio Library's
+// software interrupt, so every host object can share them.
+static float scratch_a[CHANNELS][AUDIO_BLOCK_SAMPLES];
+static float scratch_b[CHANNELS][AUDIO_BLOCK_SAMPLES];
 
 static unsigned char clampInputs(const AudioEffectX& plugin)
 {
     const VstInt32 n = plugin.getNumInputs();
     if (n <= 0) return 0;
-    return n > AudioEffectVSTHost::MAX_CHANNELS ? AudioEffectVSTHost::MAX_CHANNELS
-                                                : static_cast<unsigned char>(n);
+    return n > CHANNELS ? CHANNELS : static_cast<unsigned char>(n);
 }
 
-AudioEffectVSTHost::AudioEffectVSTHost(AudioEffectX& plugin)
-    : AudioStream(clampInputs(plugin), inputQueue_),
-      plugin_(plugin),
-      inputQueue_(),
-      supported_(plugin.getNumInputs() <= MAX_CHANNELS && plugin.getNumOutputs() <= MAX_CHANNELS),
-      bypass_(false)
+// The input blocks as float; a missing block is silence.
+static void blocksToFloat(audio_block_t* const* in, float** out)
 {
-    plugin_.setSampleRate(AUDIO_SAMPLE_RATE_EXACT);
-    plugin_.setBlockSize(AUDIO_BLOCK_SAMPLES);
-    plugin_.resume();
+    for (int ch = 0; ch < CHANNELS; ch++) {
+        if (in[ch]) {
+            vst_host::toFloat(in[ch]->data, out[ch], AUDIO_BLOCK_SAMPLES);
+        } else {
+            vst_host::silence(out[ch], AUDIO_BLOCK_SAMPLES);
+        }
+    }
 }
 
-void AudioEffectVSTHost::setParameter(int index, float value)
+static void printEffect(Print& out, VSTEffect& effect)
 {
-    if (index < 0 || index >= plugin_.getNumParams()) return;
-    if (value < 0.0f) value = 0.0f;
-    if (value > 1.0f) value = 1.0f;
-    plugin_.setParameter(index, value);
-}
-
-float AudioEffectVSTHost::getParameter(int index)
-{
-    if (index < 0 || index >= plugin_.getNumParams()) return 0.0f;
-    return plugin_.getParameter(index);
-}
-
-void AudioEffectVSTHost::parameterName(int index, char* text)
-{
-    text[0] = 0;
-    if (index >= 0 && index < plugin_.getNumParams()) plugin_.getParameterName(index, text);
-}
-
-void AudioEffectVSTHost::parameterDisplay(int index, char* text)
-{
-    text[0] = 0;
-    if (index >= 0 && index < plugin_.getNumParams()) plugin_.getParameterDisplay(index, text);
-}
-
-void AudioEffectVSTHost::parameterLabel(int index, char* text)
-{
-    text[0] = 0;
-    if (index >= 0 && index < plugin_.getNumParams()) plugin_.getParameterLabel(index, text);
-}
-
-void AudioEffectVSTHost::effectName(char* text)
-{
-    text[0] = 0;
-    plugin_.getEffectName(text);
-}
-
-void AudioEffectVSTHost::printParameters(Print& out)
-{
-    char text[TEXT_LEN];
-    effectName(text);
+    char text[VSTEffect::TEXT_LEN];
+    effect.effectName(text);
     out.print(text);
-    out.print(bypass_ ? " (bypassed)" : "");
-    if (!supported_) out.print(" (unsupported channel count, passed through)");
+    out.print(effect.bypassed() ? " (bypassed)" : "");
+    if (!effect.supported()) out.print(" (unsupported channel count, passed through)");
     out.println();
-    for (int i = 0; i < numParams(); i++) {
+    for (int i = 0; i < effect.numParams(); i++) {
         out.print("  [");
         out.print(i);
         out.print("] ");
-        parameterName(i, text);
+        effect.parameterName(i, text);
         out.print(text);
         for (int pad = static_cast<int>(strlen(text)); pad < kVstMaxParamStrLen + 1; pad++) out.print(' ');
-        out.print(getParameter(i), 3);
+        out.print(effect.getParameter(i), 3);
         out.print("  ");
-        parameterDisplay(i, text);
+        effect.parameterDisplay(i, text);
         out.print(text);
-        parameterLabel(i, text);
+        effect.parameterLabel(i, text);
         if (text[0] != 0 && text[0] != ' ') {
             out.print(' ');
             out.print(text);
@@ -94,13 +58,40 @@ void AudioEffectVSTHost::printParameters(Print& out)
     }
 }
 
+static float percentOfProcessor(uint32_t cycles)
+{
+#if defined(F_CPU_ACTUAL)
+    const float clock = static_cast<float>(F_CPU_ACTUAL);
+#else
+    const float clock = static_cast<float>(F_CPU);
+#endif
+    return static_cast<float>(cycles) * (AUDIO_SAMPLE_RATE_EXACT / AUDIO_BLOCK_SAMPLES) * 100.0f / clock;
+}
+
+/* ------------------------------------------------------------------------- */
+/* One plug-in                                                               */
+/* ------------------------------------------------------------------------- */
+
+AudioEffectVSTHost::AudioEffectVSTHost(AudioEffectX& plugin)
+    : AudioStream(clampInputs(plugin), inputQueue_), VSTEffect(plugin), inputQueue_()
+{
+    plugin.setSampleRate(AUDIO_SAMPLE_RATE_EXACT);
+    plugin.setBlockSize(AUDIO_BLOCK_SAMPLES);
+    plugin.resume();
+}
+
+void AudioEffectVSTHost::printParameters(Print& out)
+{
+    printEffect(out, *this);
+}
+
 void AudioEffectVSTHost::update(void)
 {
-    audio_block_t* in[MAX_CHANNELS];
-    for (int ch = 0; ch < MAX_CHANNELS; ch++) in[ch] = receiveReadOnly(ch);
+    audio_block_t* in[CHANNELS];
+    for (int ch = 0; ch < CHANNELS; ch++) in[ch] = receiveReadOnly(ch);
 
-    if (bypass_ || !supported_) {
-        for (int ch = 0; ch < MAX_CHANNELS; ch++) {
+    if (bypassed() || !supported()) {
+        for (int ch = 0; ch < CHANNELS; ch++) {
             if (!in[ch]) continue;
             transmit(in[ch], ch);
             release(in[ch]);
@@ -108,26 +99,121 @@ void AudioEffectVSTHost::update(void)
         return;
     }
 
-    float* ins[MAX_CHANNELS];
-    float* outs[MAX_CHANNELS];
-    for (int ch = 0; ch < MAX_CHANNELS; ch++) {
-        if (in[ch]) {
-            vst_host::toFloat(in[ch]->data, input_scratch[ch], AUDIO_BLOCK_SAMPLES);
-            release(in[ch]);
-        } else {
-            vst_host::silence(input_scratch[ch], AUDIO_BLOCK_SAMPLES);
-        }
-        ins[ch] = input_scratch[ch];
-        outs[ch] = output_scratch[ch];
+    float* ins[CHANNELS];
+    float* outs[CHANNELS];
+    for (int ch = 0; ch < CHANNELS; ch++) {
+        ins[ch] = scratch_a[ch];
+        outs[ch] = scratch_b[ch];
     }
+    blocksToFloat(in, ins);
+    for (int ch = 0; ch < CHANNELS; ch++) {
+        if (in[ch]) release(in[ch]);
+    }
+    process(ins, outs, AUDIO_BLOCK_SAMPLES);
 
-    plugin_.processReplacing(ins, outs, AUDIO_BLOCK_SAMPLES);
-
-    const int outputs = plugin_.getNumOutputs() < MAX_CHANNELS ? plugin_.getNumOutputs() : MAX_CHANNELS;
-    for (int ch = 0; ch < outputs; ch++) {
+    for (int ch = 0; ch < CHANNELS; ch++) {
         audio_block_t* block = allocate();
         if (!block) return;
-        vst_host::toInt16(output_scratch[ch], block->data, AUDIO_BLOCK_SAMPLES);
+        vst_host::toInt16(outs[ch], block->data, AUDIO_BLOCK_SAMPLES);
+        transmit(block, ch);
+        release(block);
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* A chain                                                                   */
+/* ------------------------------------------------------------------------- */
+
+AudioEffectVSTChain::AudioEffectVSTChain()
+    : AudioStream(CHANNELS, inputQueue_), slots_(), size_(0), inputQueue_(), cycles_(), cycles_max_()
+{
+}
+
+VSTEffect* AudioEffectVSTChain::add(AudioEffectX& plugin)
+{
+    if (size_ >= MAX_SLOTS) return nullptr;
+    VSTEffect& slot = slots_[size_];
+    slot.attach(plugin);
+    plugin.setSampleRate(AUDIO_SAMPLE_RATE_EXACT);
+    plugin.setBlockSize(AUDIO_BLOCK_SAMPLES);
+    plugin.resume();
+    // The slot is complete before the audio interrupt can see it.
+    size_ = size_ + 1;
+    return &slot;
+}
+
+void AudioEffectVSTChain::sampleRate(float hz)
+{
+    for (int n = 0; n < size_; n++) slots_[n].sampleRate(hz);
+}
+
+float AudioEffectVSTChain::processorUsage(int n) const
+{
+    return n >= 0 && n < size_ ? percentOfProcessor(cycles_[n]) : 0.0f;
+}
+
+float AudioEffectVSTChain::processorUsageMax(int n) const
+{
+    return n >= 0 && n < size_ ? percentOfProcessor(cycles_max_[n]) : 0.0f;
+}
+
+void AudioEffectVSTChain::processorUsageMaxReset()
+{
+    for (int n = 0; n < MAX_SLOTS; n++) cycles_max_[n] = cycles_[n];
+}
+
+void AudioEffectVSTChain::printParameters(Print& out)
+{
+    for (int n = 0; n < size_; n++) {
+        out.print(n);
+        out.print(": ");
+        printEffect(out, slots_[n]);
+    }
+}
+
+void AudioEffectVSTChain::update(void)
+{
+    audio_block_t* in[CHANNELS];
+    for (int ch = 0; ch < CHANNELS; ch++) in[ch] = receiveReadOnly(ch);
+
+    const int count = size_;
+    if (count == 0) {
+        for (int ch = 0; ch < CHANNELS; ch++) {
+            if (!in[ch]) continue;
+            transmit(in[ch], ch);
+            release(in[ch]);
+        }
+        return;
+    }
+
+    float* ping[CHANNELS];
+    float* pong[CHANNELS];
+    for (int ch = 0; ch < CHANNELS; ch++) {
+        ping[ch] = scratch_a[ch];
+        pong[ch] = scratch_b[ch];
+    }
+    float** current = ping;
+    float** next = pong;
+    blocksToFloat(in, current);
+    for (int ch = 0; ch < CHANNELS; ch++) {
+        if (in[ch]) release(in[ch]);
+    }
+
+    for (int n = 0; n < count; n++) {
+        const uint32_t start = ARM_DWT_CYCCNT;
+        slots_[n].process(current, next, AUDIO_BLOCK_SAMPLES);
+        const uint32_t cycles = ARM_DWT_CYCCNT - start;
+        cycles_[n] = cycles;
+        if (cycles > cycles_max_[n]) cycles_max_[n] = cycles;
+        float** done = next;
+        next = current;
+        current = done;
+    }
+
+    for (int ch = 0; ch < CHANNELS; ch++) {
+        audio_block_t* block = allocate();
+        if (!block) return;
+        vst_host::toInt16(current[ch], block->data, AUDIO_BLOCK_SAMPLES);
         transmit(block, ch);
         release(block);
     }

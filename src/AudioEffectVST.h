@@ -3,9 +3,12 @@
 
 // VST 2.x-style effect plug-ins as Teensy Audio Library objects.
 //
-//   audioeffectx.h       the plug-in interface (AudioEffectX) they compile against
-//   AudioEffectVST<P>    an Audio Library object that owns and runs plug-in P
-//   AudioEffectVSTHost   the same around a plug-in instance of its own
+//   audioeffectx.h        the plug-in interface (AudioEffectX) they compile against
+//   VSTEffect             one plug-in's control surface: parameters, bypass, processing
+//   AudioEffectVST<P>     an Audio Library object that owns and runs plug-in P
+//   AudioEffectVSTHost    the same around a plug-in instance of its own
+//   AudioEffectVSTChain   a row of plug-ins in one object, float from slot to slot
+//   VSTPlugin<P>          a P a sketch can declare without the SDK's constructor argument
 //
 // A plug-in binary from a computer cannot be loaded: there is no operating
 // system, no dynamic loader and the wrong processor. What runs is a plug-in's

@@ -1,6 +1,6 @@
 // A VST-style effect host: five of the open-source Airwindows plug-ins,
 // compiled into the sketch unmodified against the library's audioeffectx.h,
-// run in a chain between the inputs and outputs of a class-compliant USB
+// run as a chain between the inputs and outputs of a class-compliant USB
 // audio interface on the Teensy's host port. The serial monitor is the
 // rack's front panel.
 //
@@ -8,6 +8,11 @@
 // its source can be compiled in, and the Airwindows catalogue is written to
 // exactly the interface this host provides. plugins.h is where they are
 // listed; airwindows/README.md says where they come from.
+//
+// The chain is one Audio Library object: the audio is converted to float
+// once, goes through every plug-in in float, and comes back to 16 bits
+// once. (AudioEffectVST<P> is the same for a single plug-in that sits
+// between other Audio Library objects.)
 //
 // Wiring: the interface into the host port (see the Passthrough example).
 //
@@ -19,7 +24,7 @@
 //   l                list the plug-ins and their parameters
 //   p <n> <i> <v>    set parameter i of plug-in n to v (0 to 1)
 //   b <n>            bypass plug-in n, or bring it back
-//   s                stream status and processor use
+//   s                stream status and processor use per plug-in
 
 #include <Audio.h>
 #include <USBHost_t36.h>
@@ -31,43 +36,24 @@ USBHost usb;
 USBHub hub(usb);
 USBAudioDevice interface(usb);
 
+VSTPlugin<airwindows::capacitor::Capacitor> capacitor;
+VSTPlugin<airwindows::density::Density> density;
+VSTPlugin<airwindows::pressure4::Pressure4> pressure;
+VSTPlugin<airwindows::tape::Tape> tape;
+VSTPlugin<airwindows::tremolo::Tremolo> tremolo;
+
 AudioInputUSBHost in(interface, 2);
-AudioEffectVST<airwindows::capacitor::Capacitor> filter;
-AudioEffectVST<airwindows::density::Density> drive;
-AudioEffectVST<airwindows::pressure4::Pressure4> compressor;
-AudioEffectVST<airwindows::tape::Tape> tape;
-AudioEffectVST<airwindows::tremolo::Tremolo> tremolo;
+AudioEffectVSTChain chain;
 AudioOutputUSBHost out(interface, 2);
 
-AudioConnection c1(in, 0, filter, 0);
-AudioConnection c2(in, 1, filter, 1);
-AudioConnection c3(filter, 0, drive, 0);
-AudioConnection c4(filter, 1, drive, 1);
-AudioConnection c5(drive, 0, compressor, 0);
-AudioConnection c6(drive, 1, compressor, 1);
-AudioConnection c7(compressor, 0, tape, 0);
-AudioConnection c8(compressor, 1, tape, 1);
-AudioConnection c9(tape, 0, tremolo, 0);
-AudioConnection c10(tape, 1, tremolo, 1);
-AudioConnection c11(tremolo, 0, out, 0);
-AudioConnection c12(tremolo, 1, out, 1);
-
-// The rack, in signal order. Everything below works on this list.
-static AudioEffectVSTHost* const rack[] = {&filter, &drive, &compressor, &tape, &tremolo};
-static const int RACK_SIZE = sizeof rack / sizeof rack[0];
+AudioConnection c1(in, 0, chain, 0);
+AudioConnection c2(in, 1, chain, 1);
+AudioConnection c3(chain, 0, out, 0);
+AudioConnection c4(chain, 1, out, 1);
 
 static char line[48];
 static size_t line_len = 0;
 static USBAudioDevice::State shown = USBAudioDevice::State::Idle;
-
-static void listRack()
-{
-    for (int n = 0; n < RACK_SIZE; n++) {
-        Serial.print(n);
-        Serial.print(": ");
-        rack[n]->printParameters(Serial);
-    }
-}
 
 static void printStatus()
 {
@@ -80,24 +66,24 @@ static void printStatus()
     Serial.print(in.underruns());
     Serial.print(", dropped ");
     Serial.println(in.dropped());
-    char name[AudioEffectVSTHost::TEXT_LEN];
-    for (int n = 0; n < RACK_SIZE; n++) {
-        rack[n]->effectName(name);
+    char name[VSTEffect::TEXT_LEN];
+    for (int n = 0; n < chain.size(); n++) {
+        chain.slot(n)->effectName(name);
         Serial.print("  ");
-        Serial.print(name);
+        Serial.print(n);
         Serial.print(": ");
-        Serial.print(rack[n]->processorUsageMax());
-        Serial.println(rack[n]->bypassed() ? "% cpu, bypassed" : "% cpu");
+        Serial.print(name);
+        Serial.print(' ');
+        Serial.print(chain.processorUsageMax(n));
+        Serial.println(chain.slot(n)->bypassed() ? "% cpu, bypassed" : "% cpu");
     }
 }
 
-static AudioEffectVSTHost* pluginAt(long n)
+static VSTEffect* slotAt(long n)
 {
-    if (n < 0 || n >= RACK_SIZE) {
-        Serial.println("no such plug-in; l lists them");
-        return nullptr;
-    }
-    return rack[n];
+    VSTEffect* slot = chain.slot(n);
+    if (!slot) Serial.println("no such plug-in; l lists them");
+    return slot;
 }
 
 static void handleLine(char* s)
@@ -106,35 +92,35 @@ static void handleLine(char* s)
     const char command = *s;
     char* p = s + 1;
     if (command == 'l') {
-        listRack();
+        chain.printParameters(Serial);
     } else if (command == 'p') {
         const long n = strtol(p, &p, 10);
         const long i = strtol(p, &p, 10);
         const float v = strtof(p, &p);
-        AudioEffectVSTHost* plugin = pluginAt(n);
-        if (!plugin) return;
-        if (i < 0 || i >= plugin->numParams()) {
+        VSTEffect* slot = slotAt(n);
+        if (!slot) return;
+        if (i < 0 || i >= slot->numParams()) {
             Serial.println("no such parameter; l lists them");
             return;
         }
-        plugin->setParameter(i, v);
-        char text[AudioEffectVSTHost::TEXT_LEN];
-        plugin->parameterName(i, text);
+        slot->setParameter(i, v);
+        char text[VSTEffect::TEXT_LEN];
+        slot->parameterName(i, text);
         Serial.print(text);
         Serial.print(" = ");
-        plugin->parameterDisplay(i, text);
+        slot->parameterDisplay(i, text);
         Serial.print(text);
-        plugin->parameterLabel(i, text);
+        slot->parameterLabel(i, text);
         Serial.print(' ');
         Serial.println(text);
     } else if (command == 'b') {
-        AudioEffectVSTHost* plugin = pluginAt(strtol(p, &p, 10));
-        if (!plugin) return;
-        plugin->bypass(!plugin->bypassed());
-        char text[AudioEffectVSTHost::TEXT_LEN];
-        plugin->effectName(text);
+        VSTEffect* slot = slotAt(strtol(p, &p, 10));
+        if (!slot) return;
+        slot->bypass(!slot->bypassed());
+        char text[VSTEffect::TEXT_LEN];
+        slot->effectName(text);
         Serial.print(text);
-        Serial.println(plugin->bypassed() ? " bypassed" : " active");
+        Serial.println(slot->bypassed() ? " bypassed" : " active");
     } else if (command == 's') {
         printStatus();
     } else if (command != 0) {
@@ -162,11 +148,19 @@ void setup()
     AudioMemory(40);
     interface.setSampleRate(44100);
     interface.setChannels(2, 2);
+
+    // The rack, in signal order.
+    chain.add(capacitor);
+    chain.add(density);
+    chain.add(pressure);
+    chain.add(tape);
+    chain.add(tremolo);
     // Airwindows parameters are 0..1 and start where the plug-in's author
     // left them, which is mostly transparent. A little of each, to hear:
-    drive.setParameter(0, 0.4f);       // Density: some saturation
-    compressor.setParameter(0, 0.3f);  // Pressure4: a touch of compression
-    tremolo.setParameter(1, 0.0f);     // Tremolo: depth off until asked for
+    chain.slot(1)->setParameter(0, 0.4f);  // Density: some saturation
+    chain.slot(2)->setParameter(0, 0.3f);  // Pressure4: a touch of compression
+    chain.slot(4)->setParameter(1, 0.0f);  // Tremolo: depth off until asked for
+
     usb.begin();
     in.begin();
     out.begin();
@@ -180,10 +174,8 @@ void loop()
     if (interface.state() != shown) {
         shown = interface.state();
         interface.printStatus(Serial);
-        if (shown == USBAudioDevice::State::Streaming) {
-            // The plug-ins scale their time constants by the rate they are told.
-            for (int n = 0; n < RACK_SIZE; n++) rack[n]->sampleRate(interface.sampleRate());
-        }
+        // The plug-ins scale their time constants by the rate they are told.
+        if (shown == USBAudioDevice::State::Streaming) chain.sampleRate(interface.sampleRate());
     }
 
     readSerial();

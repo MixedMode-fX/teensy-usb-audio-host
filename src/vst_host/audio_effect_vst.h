@@ -4,77 +4,64 @@
 #include <Arduino.h>
 #include <AudioStream.h>
 #include "audioeffectx.h"
+#include "vst_host/effect.h"
 
-// An effect written to the VST 2.x plug-in interface (the AudioEffectX class
-// of audioeffectx.h) as a Teensy Audio Library object. Inputs 0 and 1 go to
-// the plug-in's two inputs, its two outputs come out as outputs 0 and 1, a
+// Effects written to the VST 2.x plug-in interface (the AudioEffectX class
+// of audioeffectx.h) as Teensy Audio Library objects. Inputs 0 and 1 go to
+// a plug-in's two inputs, its two outputs come out as outputs 0 and 1, a
 // block at a time, in float.
 //
-//     AudioEffectVST<capacitor::Capacitor> filter;    // owns the plug-in
+// One plug-in, owned by the object:
+//
+//     AudioEffectVST<airwindows::capacitor::Capacitor> filter;
 //     AudioConnection c1(in, 0, filter, 0);
-//     AudioConnection c2(in, 1, filter, 1);
 //     filter.setParameter(0, 0.5f);                    // 0..1, as VST does
 //
-// AudioEffectVST constructs the plug-in; AudioEffectVSTHost, its base, is the
-// same object around a plug-in instance that lives elsewhere.
+// A chain of them, which keeps the audio in float from one plug-in to the
+// next instead of going through the Audio Library's 16-bit blocks between
+// every two:
 //
-// Stereo in, stereo out is what the host carries, which is what every
-// Airwindows plug-in is; a plug-in declaring more channels than that is
-// passed through unprocessed and says so in supported(). A plug-in declaring
-// fewer gets the first channels.
+//     VSTPlugin<airwindows::capacitor::Capacitor> capacitor;
+//     VSTPlugin<airwindows::tape::Tape> tape;
+//     AudioEffectVSTChain chain;
+//     ... chain.add(capacitor); chain.add(tape);        // in setup(), in signal order
+//     chain.slot(1)->setParameter(0, 0.7f);
 //
-// Parameters are set from loop() and read by the plug-in at the start of
-// each block it processes in the audio interrupt; a float store is one
-// instruction, so no locking is needed. The plug-in is told
-// AUDIO_SAMPLE_RATE_EXACT at construction; tell it the actual rate with
-// sampleRate() once the interface has negotiated one.
-//
-// An unconnected input is silence to the plug-in, which still runs, so a
-// reverb's tail rings out after its source stops. Bypass passes the input
-// blocks through untouched and does not run the plug-in.
-class AudioEffectVSTHost : public AudioStream {
-public:
-    static const int MAX_CHANNELS = 2;
-    // Room for every string a plug-in writes, with its terminator; plug-ins
-    // have been seen to write a product-length string as their name.
-    static const int TEXT_LEN = kVstMaxProductStrLen + 1;
+// The control surface of a plug-in in either (parameters, bypass, names) is
+// VSTEffect (vst_host/effect.h): AudioEffectVSTHost is one, and the chain's
+// slots are. Every plug-in is told AUDIO_SAMPLE_RATE_EXACT to begin with;
+// tell it the interface's actual rate with sampleRate() once it is known.
 
+// A plug-in instance a sketch can declare without the SDK's constructor
+// argument: VSTPlugin<P> is a P constructed with no host callback.
+template <class Plugin>
+class VSTPlugin : public Plugin {
+public:
+    VSTPlugin() : Plugin(nullptr) {}
+};
+
+// One plug-in as an Audio Library object. An unconnected input is silence
+// to the plug-in, which still runs, so a reverb's tail rings out after its
+// source stops. Bypass passes the input blocks through untouched and does
+// not run the plug-in.
+class AudioEffectVSTHost : public AudioStream, public VSTEffect {
+public:
     explicit AudioEffectVSTHost(AudioEffectX& plugin);
     virtual void update(void);
-
-    AudioEffectX& plugin() { return plugin_; }
-    bool supported() const { return supported_; }
-
-    void sampleRate(float hz) { plugin_.setSampleRate(hz); }
-    float sampleRate() const { return plugin_.getSampleRate(); }
-
-    void bypass(bool on) { bypass_ = on; }
-    bool bypassed() const { return bypass_; }
-
-    int numParams() const { return plugin_.getNumParams(); }
-    void setParameter(int index, float value);
-    float getParameter(int index);
-    void parameterName(int index, char* text);     // text[TEXT_LEN]
-    void parameterDisplay(int index, char* text);  // the value as the plug-in shows it
-    void parameterLabel(int index, char* text);    // its unit
-    void effectName(char* text);
 
     // One line for the effect and one per parameter, for a serial monitor.
     void printParameters(Print& out);
 
 private:
-    AudioEffectX& plugin_;
-    audio_block_t* inputQueue_[MAX_CHANNELS];
-    bool supported_;
-    volatile bool bypass_;
+    audio_block_t* inputQueue_[VSTEffect::MAX_CHANNELS];
 };
 
 // Holds the plug-in so it is constructed before the AudioStream base, which
 // asks it how many inputs it has.
 template <class Plugin>
 struct AudioEffectVSTStorage {
-    AudioEffectVSTStorage() : owned(nullptr) {}
-    Plugin owned;
+    AudioEffectVSTStorage() : owned() {}
+    VSTPlugin<Plugin> owned;
 };
 
 template <class Plugin>
@@ -82,6 +69,45 @@ class AudioEffectVST : private AudioEffectVSTStorage<Plugin>, public AudioEffect
 public:
     AudioEffectVST() : AudioEffectVSTStorage<Plugin>(), AudioEffectVSTHost(this->owned) {}
     Plugin& plugin() { return this->owned; }
+};
+
+// Slots in a chain. Overridable from the build.
+#ifndef VST_HOST_MAX_CHAIN
+#define VST_HOST_MAX_CHAIN 8
+#endif
+
+// A row of plug-ins as one Audio Library object: the input blocks are
+// converted to float once, run through every slot in order, and converted
+// back once. Add plug-ins in setup(); a slot added while audio runs joins
+// at the next block. Per-slot processor use is measured with the cycle
+// counter, as the Audio Library measures its objects.
+class AudioEffectVSTChain : public AudioStream {
+public:
+    static const int MAX_SLOTS = VST_HOST_MAX_CHAIN;
+
+    AudioEffectVSTChain();
+    virtual void update(void);
+
+    // Appends a plug-in and returns its slot, or nullptr when the chain is full.
+    VSTEffect* add(AudioEffectX& plugin);
+    int size() const { return size_; }
+    VSTEffect* slot(int n) { return n >= 0 && n < size_ ? &slots_[n] : nullptr; }
+
+    void sampleRate(float hz);  // tells every slot
+
+    float processorUsage(int n) const;
+    float processorUsageMax(int n) const;
+    void processorUsageMaxReset();
+
+    // Every slot, numbered, each as AudioEffectVSTHost::printParameters.
+    void printParameters(Print& out);
+
+private:
+    VSTEffect slots_[MAX_SLOTS];
+    volatile int size_;
+    audio_block_t* inputQueue_[VSTEffect::MAX_CHANNELS];
+    uint32_t cycles_[MAX_SLOTS];
+    uint32_t cycles_max_[MAX_SLOTS];
 };
 
 #endif

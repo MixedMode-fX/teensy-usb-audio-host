@@ -6,6 +6,7 @@
 #include <math.h>
 #include "audioeffectx.h"
 #include "vst_host/sample_format.h"
+#include "vst_host/effect.h"
 #include "../../examples/VSTHost/plugins.h"
 
 void setUp() {}
@@ -134,6 +135,103 @@ static void test_value_to_text_fits_the_sdk_lengths()
 }
 
 /* ------------------------------------------------------------------------- */
+/* The control surface a host puts around a plug-in                          */
+/* ------------------------------------------------------------------------- */
+
+static void test_effect_clamps_parameters_and_bounds_indices()
+{
+    Gain gain(nullptr);
+    VSTEffect effect(gain);
+    TEST_ASSERT_FALSE(effect.empty());
+    TEST_ASSERT_TRUE(effect.supported());
+    TEST_ASSERT_EQUAL_INT(1, effect.numParams());
+    effect.setParameter(0, 1.7f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 1.0f, effect.getParameter(0));
+    effect.setParameter(0, -0.2f);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, effect.getParameter(0));
+    effect.setParameter(5, 0.5f);  // no such parameter: ignored
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, effect.getParameter(0));
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, effect.getParameter(5));
+    char text[VSTEffect::TEXT_LEN];
+    effect.parameterName(0, text);
+    TEST_ASSERT_EQUAL_STRING("Gain", text);
+    effect.parameterName(5, text);
+    TEST_ASSERT_EQUAL_STRING("", text);
+    effect.effectName(text);
+    TEST_ASSERT_EQUAL_STRING("Gain", text);
+    effect.sampleRate(48000.0f);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 48000.0f, gain.getSampleRate());
+}
+
+static void test_effect_processes_or_passes_through()
+{
+    Gain gain(nullptr);
+    VSTEffect effect(gain);
+    float l[4] = {0.1f, 0.2f, -0.3f, 0.4f};
+    float r[4] = {1.0f, -1.0f, 0.5f, 0.0f};
+    float ol[4], orr[4];
+    float* in[2] = {l, r};
+    float* out[2] = {ol, orr};
+    effect.process(in, out, 4);  // gain 0.5
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.05f, ol[0]);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, -0.5f, orr[1]);
+    effect.bypass(true);
+    TEST_ASSERT_TRUE(effect.bypassed());
+    effect.process(in, out, 4);
+    TEST_ASSERT_EQUAL_FLOAT_ARRAY(l, ol, 4);
+    TEST_ASSERT_EQUAL_FLOAT_ARRAY(r, orr, 4);
+}
+
+// A plug-in that wants more channels than the host carries.
+class Quad : public Gain {
+public:
+    explicit Quad(audioMasterCallback master) : Gain(master)
+    {
+        setNumInputs(4);
+        setNumOutputs(4);
+    }
+};
+
+static void test_effect_passes_an_unsupported_plugin_through()
+{
+    Quad quad(nullptr);
+    VSTEffect effect(quad);
+    TEST_ASSERT_FALSE(effect.supported());
+    float l[2] = {0.25f, -0.25f};
+    float r[2] = {0.5f, -0.5f};
+    float ol[2], orr[2];
+    float* in[2] = {l, r};
+    float* out[2] = {ol, orr};
+    effect.process(in, out, 2);
+    TEST_ASSERT_EQUAL_FLOAT_ARRAY(l, ol, 2);
+    TEST_ASSERT_EQUAL_FLOAT_ARRAY(r, orr, 2);
+}
+
+static void test_empty_slot_is_a_wire()
+{
+    VSTEffect effect;
+    TEST_ASSERT_TRUE(effect.empty());
+    TEST_ASSERT_FALSE(effect.supported());
+    TEST_ASSERT_EQUAL_INT(0, effect.numParams());
+    char text[VSTEffect::TEXT_LEN];
+    effect.effectName(text);
+    TEST_ASSERT_EQUAL_STRING("", text);
+    float l[2] = {0.25f, -0.25f};
+    float r[2] = {0.5f, -0.5f};
+    float ol[2], orr[2];
+    float* in[2] = {l, r};
+    float* out[2] = {ol, orr};
+    effect.process(in, out, 2);
+    TEST_ASSERT_EQUAL_FLOAT_ARRAY(l, ol, 2);
+    TEST_ASSERT_EQUAL_FLOAT_ARRAY(r, orr, 2);
+    Gain gain(nullptr);
+    effect.attach(gain);
+    TEST_ASSERT_TRUE(effect.supported());
+    effect.process(in, out, 2);
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.125f, ol[0]);
+}
+
+/* ------------------------------------------------------------------------- */
 /* The Airwindows plug-ins the example carries                               */
 /* ------------------------------------------------------------------------- */
 
@@ -244,6 +342,10 @@ int main()
     RUN_TEST(test_plugin_processes_a_block);
     RUN_TEST(test_strncpy_truncates_and_terminates);
     RUN_TEST(test_value_to_text_fits_the_sdk_lengths);
+    RUN_TEST(test_effect_clamps_parameters_and_bounds_indices);
+    RUN_TEST(test_effect_processes_or_passes_through);
+    RUN_TEST(test_effect_passes_an_unsupported_plugin_through);
+    RUN_TEST(test_empty_slot_is_a_wire);
     RUN_TEST(test_airwindows_plugins_construct_and_identify);
     RUN_TEST(test_capacitor_dry_passes_the_signal_through);
     RUN_TEST(test_capacitor_shut_lowpass_removes_the_tone);
