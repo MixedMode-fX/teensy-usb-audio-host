@@ -6,10 +6,11 @@
 
 PIO := .venv/bin/pio
 
-.PHONY: help setup checks test build size clean distclean
+.PHONY: help setup ready checks test build size clean distclean
 
 help:
 	@echo "make setup    - install PlatformIO into .venv/ and pre-fetch the toolchains"
+	@echo "make ready    - block until a fresh container is prepared (instant when it is)"
 	@echo "make checks   - the commit gate: native tests and every firmware build (silence = pass)"
 	@echo "make test     - the native unit tests"
 	@echo "make build    - the examples, for the Teensy 4.1 and 3.6"
@@ -21,6 +22,9 @@ $(PIO):
 
 setup:
 	@scripts/bootstrap.sh --warm
+
+ready:
+	@bash scripts/await_ready.sh
 
 checks: $(PIO)
 	bash scripts/checks.sh $(SCOPE)
