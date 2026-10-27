@@ -7,6 +7,7 @@
 #include "audioeffectx.h"
 #include "vst_host/effect.h"
 #include "../../examples/CumulusReverb/cumulus_reverb.h"
+#include "mutable_reverb.h"
 
 void setUp() {}
 void tearDown() {}
@@ -68,7 +69,7 @@ static void test_identifies_and_declares_its_parameters()
     TEST_ASSERT_EQUAL_INT32(2, reverb->getNumOutputs());
     TEST_ASSERT_EQUAL_INT32(CumulusReverb::NUM_PARAMS, reverb->getNumParams());
     TEST_ASSERT_EQUAL(kPlugCategRoomFx, reverb->getPlugCategory());
-    const char* const names[] = {"Amount", "Time", "Diffuse", "Tone", "Input"};
+    const char* const names[] = {"Amount", "Time", "Diffuse", "Tone", "Input", "Clock", "Warp", "Speed", "Glitch"};
     for (int i = 0; i < CumulusReverb::NUM_PARAMS; i++) {
         reverb->getParameterName(i, text);
         TEST_ASSERT_EQUAL_STRING(names[i], text);
@@ -217,6 +218,121 @@ static void test_runs_any_block_length()
     TEST_ASSERT_EQUAL_FLOAT_ARRAY(a[1], b[1], 100);
 }
 
+// With the clock at x1 and still, what comes out is clouds::Reverb's own,
+// run as Clouds runs it, in blocks with its crossfade.
+static void test_the_default_clock_is_clouds_own()
+{
+    static uint16_t memory[CumulusReverb::DELAY_WORDS];
+    static clouds::Reverb raw;  // static: zeroed, as Clouds' memory is
+    raw.Init(memory);
+    raw.set_amount(0.6f);
+    raw.set_time(0.35f + 0.63f * 0.5f);
+    raw.set_diffusion(0.4f + 0.4f * 0.75f);
+    raw.set_lp(1.0f - expf(-0.1278f * powf(3.5066f / 0.1278f, 0.75f)));
+    raw.set_input_gain(0.4f * 0.5f);
+    fresh();
+    reverb->setParameter(CumulusReverb::PARAM_AMOUNT, 0.6f);
+    static float il[BLOCK], ir[BLOCK], ol[BLOCK], orr[BLOCK];
+    float* in[2] = {il, ir};
+    float* out[2] = {ol, orr};
+    clouds::FloatFrame frames[BLOCK];
+    for (int b = 0; b < 40; b++) {
+        for (int i = 0; i < BLOCK; i++) {
+            il[i] = b < 4 ? 0.4f * sinf(0.03f * static_cast<float>(b * BLOCK + i)) : 0.0f;
+            ir[i] = 0.5f * il[i];
+            frames[i].l = il[i];
+            frames[i].r = ir[i];
+        }
+        reverb->processReplacing(in, out, BLOCK);
+        raw.Process(frames, BLOCK);
+        for (int i = 0; i < BLOCK; i++) {
+            TEST_ASSERT_FLOAT_WITHIN(1e-5f, frames[i].l, ol[i]);
+            TEST_ASSERT_FLOAT_WITHIN(1e-5f, frames[i].r, orr[i]);
+        }
+    }
+}
+
+// The energy of the tail's sample-to-sample steps: its top end.
+static float brightness(float tone)
+{
+    fresh();
+    reverb->setParameter(CumulusReverb::PARAM_AMOUNT, 1.0f);
+    reverb->setParameter(CumulusReverb::PARAM_TONE, tone);
+    static float il[BLOCK], ir[BLOCK], ol[BLOCK], orr[BLOCK];
+    float* in[2] = {il, ir};
+    float* out[2] = {ol, orr};
+    float steps = 0.0f, last = 0.0f;
+    for (int b = 0; b < SECOND / 2; b++) {
+        for (int i = 0; i < BLOCK; i++) il[i] = ir[i] = 0.0f;
+        if (b == 0) il[0] = 0.5f;
+        reverb->processReplacing(in, out, BLOCK);
+        for (int i = 0; i < BLOCK; i++) {
+            if (b >= SECOND / 8) steps += (ol[i] - last) * (ol[i] - last);
+            last = ol[i];
+        }
+    }
+    return steps;
+}
+
+static void test_tone_darkens_the_tail_a_lot()
+{
+    TEST_ASSERT_TRUE(brightness(0.0f) < brightness(1.0f) * 0.01f);
+    TEST_ASSERT_TRUE(brightness(0.4f) < brightness(0.75f) * 0.3f);
+}
+
+// The slower clock hears less of an impulse, smoothed down to its rate, so
+// what is compared is how much of each tail is left after a second against
+// its first quarter second.
+static void test_a_slower_clock_makes_a_bigger_room()
+{
+    float lasting[2];
+    for (int c = 0; c < 2; c++) {
+        fresh();
+        reverb->setParameter(CumulusReverb::PARAM_AMOUNT, 1.0f);
+        reverb->setParameter(CumulusReverb::PARAM_CLOCK, c ? 0.0f : 1.0f);
+        const Energy early = run(impulse_, silence_, SECOND / 4, 0);
+        const Energy late = run(silence_, silence_, SECOND, 3 * SECOND / 4);
+        lasting[c] = (late.l + late.r) / (early.l + early.r);
+    }
+    TEST_ASSERT_TRUE(lasting[1] > lasting[0] * 100.0f);
+}
+
+// How far a steady tone's reverb moves from the still clock's, over two
+// seconds, against its level.
+static float movement(int parameter)
+{
+    float* outs[2];
+    static float a[2 * SECOND * BLOCK], b[2 * SECOND * BLOCK];
+    outs[0] = a;
+    outs[1] = b;
+    for (int k = 0; k < 2; k++) {
+        fresh();
+        reverb->setParameter(CumulusReverb::PARAM_AMOUNT, 1.0f);
+        reverb->setParameter(CumulusReverb::PARAM_CLOCK, 0.7f);
+        if (k) reverb->setParameter(parameter, 1.0f);
+        static float il[BLOCK], ir[BLOCK], orr[BLOCK];
+        float* in[2] = {il, ir};
+        for (int blk = 0; blk < 2 * SECOND; blk++) {
+            for (int i = 0; i < BLOCK; i++) il[i] = ir[i] = 0.3f * sinf(0.0627f * static_cast<float>(blk * BLOCK + i));
+            float* out[2] = {outs[k] + blk * BLOCK, orr};
+            reverb->processReplacing(in, out, BLOCK);
+        }
+    }
+    float diff = 0.0f, level = 0.0f;
+    for (int i = SECOND * BLOCK; i < 2 * SECOND * BLOCK; i++) {
+        TEST_ASSERT_TRUE(isfinite(b[i]));
+        diff += (a[i] - b[i]) * (a[i] - b[i]);
+        level += a[i] * a[i];
+    }
+    return diff / level;
+}
+
+static void test_warp_and_glitch_move_the_clock()
+{
+    TEST_ASSERT_TRUE(movement(CumulusReverb::PARAM_WARP) > 0.2f);
+    TEST_ASSERT_TRUE(movement(CumulusReverb::PARAM_GLITCH) > 0.05f);
+}
+
 static void test_the_host_drives_it()
 {
     fresh();
@@ -240,6 +356,10 @@ int main()
     RUN_TEST(test_the_longest_brightest_setting_stays_bounded);
     RUN_TEST(test_clear_stops_the_tail_at_the_next_block);
     RUN_TEST(test_runs_any_block_length);
+    RUN_TEST(test_the_default_clock_is_clouds_own);
+    RUN_TEST(test_tone_darkens_the_tail_a_lot);
+    RUN_TEST(test_a_slower_clock_makes_a_bigger_room);
+    RUN_TEST(test_warp_and_glitch_move_the_clock);
     RUN_TEST(test_the_host_drives_it);
     delete reverb;
     return UNITY_END();
