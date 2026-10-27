@@ -1,0 +1,863 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ferric Panel</title>
+<!--
+  A front panel for the FerricTape sketch, over Web Serial: every knob sends
+  the sketch's own serial command, `v <control> <0..127>`, and what the
+  sketch prints back is typed onto the paper. Chrome or Edge; close the
+  Arduino serial monitor first, as only one program can hold the port.
+  Open this file directly, or serve it with `make panel`.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Permanent+Marker&family=Archivo+Narrow:wght@700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --cork: #b4864f;
+  --paper: #f4ecd6;
+  --paper-2: #efe6c9;
+  --ink: #2a2620;
+  --ink-soft: #5b5246;
+  --red: #c8372d;
+  --blue: #2c5aa0;
+  --green: #3d7a3a;
+  --yellow: #f2c230;
+  --tape: rgba(236, 224, 186, 0.78);
+  --dymo-black: #17171a;
+  --dymo-red: #b3262b;
+  --dymo-blue: #1f4f9a;
+  --dymo-green: #2b6a3a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  min-height: 100vh;
+  color: var(--ink);
+  font-family: "Special Elite", "Courier New", monospace;
+  background-color: var(--cork);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .25 0 0 0 0 .16 0 0 0 0 .07 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),
+    radial-gradient(circle at 20% 10%, rgba(255,230,190,.25), transparent 40%),
+    radial-gradient(circle at 80% 90%, rgba(60,30,10,.25), transparent 50%);
+  overflow-x: hidden;
+}
+main { max-width: 1180px; margin: 0 auto; padding: 28px 16px 60px; }
+
+/* ---------- labels, tape and stickers ---------- */
+.dymo {
+  display: inline-block;
+  padding: 4px 11px 3px;
+  background: var(--dymo, var(--dymo-black));
+  background-image: linear-gradient(180deg, rgba(255,255,255,.14), rgba(255,255,255,0) 45%, rgba(0,0,0,.18));
+  color: #f7f5ef;
+  font-family: "Archivo Narrow", "Arial Narrow", sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  text-shadow: 0 -1px 0 rgba(0,0,0,.7), 0 1px 0 rgba(255,255,255,.28);
+  border-radius: 2px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.45);
+  transform: rotate(var(--tilt, 0deg));
+  clip-path: polygon(0 8%, 3px 0, calc(100% - 3px) 0, 100% 10%, 100% 92%, calc(100% - 3px) 100%, 3px 100%, 0 90%);
+  white-space: nowrap;
+}
+.dymo.red { --dymo: var(--dymo-red); }
+.dymo.blue { --dymo: var(--dymo-blue); }
+.dymo.green { --dymo: var(--dymo-green); }
+
+.tape {
+  position: absolute;
+  width: 112px;
+  height: 30px;
+  background: var(--tape);
+  box-shadow: 0 1px 2px rgba(0,0,0,.12);
+  clip-path: polygon(0 6%, 4% 0, 8% 9%, 13% 1%, 18% 7%, 24% 0, 76% 0, 81% 8%, 86% 0, 91% 9%, 96% 1%, 100% 7%, 100% 94%, 95% 100%, 90% 91%, 85% 100%, 80% 92%, 75% 100%, 25% 100%, 19% 93%, 14% 100%, 9% 92%, 4% 100%, 0 93%);
+  z-index: 3;
+  pointer-events: none;
+}
+.tape.tl { top: -13px; left: -26px; transform: rotate(-38deg); }
+.tape.tr { top: -12px; right: -28px; transform: rotate(33deg); }
+.tape.tc { top: -15px; left: calc(50% - 56px); transform: rotate(-3deg); }
+.tape.bl { bottom: -12px; left: -24px; transform: rotate(31deg); }
+
+.deco {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  font-family: "Archivo Narrow", sans-serif;
+  font-weight: 700;
+  line-height: 1;
+  border: 3px solid #fffdf6;
+  box-shadow: 0 2px 3px rgba(0,0,0,.3);
+  transform: rotate(var(--tilt, 0deg));
+  z-index: 4;
+  pointer-events: none;
+  user-select: none;
+}
+.deco.dot { width: 58px; height: 58px; border-radius: 50%; font-size: 12px; letter-spacing: .05em; }
+.deco.star {
+  width: 78px; height: 78px; border: 0; font-size: 13px;
+  clip-path: polygon(50% 0, 61% 18%, 82% 9%, 79% 31%, 100% 38%, 84% 53%, 96% 73%, 74% 75%, 69% 97%, 50% 84%, 31% 97%, 26% 75%, 4% 73%, 16% 53%, 0 38%, 21% 31%, 18% 9%, 39% 18%);
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,.3));
+}
+.deco.rect { padding: 6px 9px; border-radius: 4px; font-size: 11px; letter-spacing: .12em; }
+
+/* ---------- header: the cassette ---------- */
+header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 28px 40px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 38px;
+}
+.title { position: relative; }
+.title .dymo.big {
+  font-size: clamp(34px, 7vw, 58px);
+  letter-spacing: .26em;
+  padding: 8px 18px 6px 24px;
+  --tilt: -2.5deg;
+}
+.title .sub { margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
+.title .sub .dymo { --tilt: 1.5deg; }
+
+.cassette {
+  position: relative;
+  width: min(380px, 100%);
+  aspect-ratio: 1.6;
+  background: linear-gradient(180deg, #3a3633, #242120);
+  border-radius: 14px;
+  box-shadow: 0 8px 18px rgba(0,0,0,.45), inset 0 2px 0 rgba(255,255,255,.08);
+  transform: rotate(2.2deg);
+}
+.cassette .label {
+  position: absolute;
+  left: 6%; right: 6%; top: 7%; bottom: 22%;
+  background: var(--paper);
+  border-radius: 6px;
+  padding: 7px 12px;
+  background-image: repeating-linear-gradient(180deg, transparent 0 15px, rgba(44,90,160,.18) 15px 16px);
+}
+.cassette .label .hand {
+  font-family: "Permanent Marker", cursive;
+  font-size: clamp(16px, 4vw, 22px);
+  color: #2a3d7a;
+  transform: rotate(-2deg);
+  white-space: nowrap;
+}
+.cassette .label .side {
+  position: absolute; right: 10px; top: 6px;
+  font-family: "Permanent Marker", cursive; font-size: 22px; color: var(--red);
+}
+.cassette .window {
+  position: absolute;
+  left: 24%; right: 24%; top: 36%;
+  height: 32%;
+  background: #1a1716;
+  border-radius: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4%;
+  box-shadow: inset 0 2px 6px rgba(0,0,0,.8);
+}
+.reel { width: 34%; aspect-ratio: 1; }
+.cassette .bottom {
+  position: absolute; left: 20%; right: 20%; bottom: 0;
+  height: 18%;
+  background: #2c2928;
+  clip-path: polygon(8% 0, 92% 0, 100% 100%, 0 100%);
+}
+
+/* ---------- connection strip ---------- */
+.deck {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px 26px;
+  align-items: center;
+  margin: -6px 0 34px;
+}
+.lamp {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #5a1c18;
+  box-shadow: inset 0 -2px 3px rgba(0,0,0,.5);
+  display: inline-block; vertical-align: middle; margin-right: 8px;
+}
+.lamp.on { background: #ff4a3a; box-shadow: 0 0 10px #ff4a3a, inset 0 -2px 3px rgba(0,0,0,.3); }
+.status-line { font-size: 15px; color: #1d150c; background: rgba(244,236,214,.82); padding: 6px 12px; transform: rotate(-.8deg); box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+
+/* ---------- sticker buttons ---------- */
+.btn {
+  appearance: none;
+  border: 3px solid #fffdf6;
+  font: 700 14px/1 "Archivo Narrow", sans-serif;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: #fff;
+  background: var(--bg, var(--red));
+  border-radius: 50%;
+  width: 92px; height: 92px;
+  display: inline-grid; place-items: center;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 3px 0 rgba(0,0,0,.25), 0 4px 8px rgba(0,0,0,.3);
+  transform: rotate(var(--tilt, 0deg));
+  transition: transform .08s, box-shadow .08s, filter .15s;
+  text-shadow: 0 1px 0 rgba(0,0,0,.35);
+  padding: 8px;
+}
+.btn:hover { transform: rotate(var(--tilt, 0deg)) scale(1.04); }
+.btn:active { transform: rotate(var(--tilt, 0deg)) translateY(2px) scale(.98); box-shadow: 0 1px 0 rgba(0,0,0,.25), 0 2px 4px rgba(0,0,0,.3); }
+.btn:focus-visible { outline: 3px dashed var(--ink); outline-offset: 4px; }
+.btn.wide { width: auto; height: auto; border-radius: 8px; padding: 12px 18px; }
+.btn.lit { filter: brightness(1.15) saturate(1.2); box-shadow: 0 0 0 4px var(--yellow), 0 4px 10px rgba(0,0,0,.35); }
+.btn[disabled] { filter: grayscale(.7) brightness(.85); cursor: not-allowed; }
+
+/* ---------- cards ---------- */
+.board {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 44px 34px;
+  align-items: start;
+}
+.card {
+  position: relative;
+  background: var(--paper);
+  padding: 30px 18px 18px;
+  box-shadow: 0 6px 12px rgba(40,20,0,.35), 0 1px 0 rgba(255,255,255,.4) inset;
+  transform: rotate(var(--tilt, 0deg));
+}
+.card.index {
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(180deg, transparent 26px, rgba(200,55,45,.55) 26px 28px, transparent 28px),
+    repeating-linear-gradient(180deg, transparent 0 22px, rgba(44,90,160,.2) 22px 23px);
+  background-position: 0 0, 0 28px;
+}
+.card.graph {
+  background-color: #eef0e6;
+  background-image:
+    linear-gradient(rgba(60,120,110,.18) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(60,120,110,.18) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+.card.kraft { background: #c9a777; background-image: radial-gradient(rgba(90,60,20,.18) 1px, transparent 1px); background-size: 5px 5px; }
+.card.wide { grid-column: 1 / -1; }
+.card > .head { margin: -46px 0 18px -6px; position: relative; z-index: 5; }
+.card .note { font-size: 13px; color: var(--ink-soft); margin: 2px 0 14px; }
+
+.knobs { display: flex; flex-wrap: wrap; gap: 20px 14px; justify-content: space-around; }
+
+/* ---------- knobs ---------- */
+.ctl {
+  display: flex; flex-direction: column; align-items: center; gap: 7px;
+  width: 96px;
+  transform: rotate(var(--tilt, 0deg));
+}
+.ctl .dymo { font-size: 11px; padding: 3px 8px 2px; letter-spacing: .16em; }
+.dial { position: relative; width: 84px; height: 84px; }
+.dial svg.ticks { position: absolute; inset: 0; }
+.knob {
+  position: absolute; inset: 13px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 34% 28%, #6e6862, #2b2724 55%, #141210 100%);
+  box-shadow: 0 4px 6px rgba(0,0,0,.45), inset 0 -3px 5px rgba(0,0,0,.6), inset 0 2px 2px rgba(255,255,255,.18);
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+}
+.knob:active { cursor: grabbing; }
+.knob:focus-visible { box-shadow: 0 0 0 3px var(--yellow), 0 4px 6px rgba(0,0,0,.45); }
+.knob .cap {
+  position: absolute; inset: 0; border-radius: 50%;
+  transform: rotate(var(--angle, 0deg));
+}
+.knob .cap::before {
+  content: ""; position: absolute; left: calc(50% - 2.5px); top: 5px;
+  width: 5px; height: 17px; border-radius: 3px;
+  background: var(--pointer, #efe4c2);
+  box-shadow: 0 0 0 1px rgba(0,0,0,.3);
+}
+.knob .cap::after {
+  content: ""; position: absolute; inset: 30%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #8a837b, #3a3531);
+  box-shadow: inset 0 1px 1px rgba(255,255,255,.25);
+}
+.readout {
+  font-size: 15px;
+  min-width: 74px;
+  text-align: center;
+  background: rgba(255,255,255,.55);
+  border-bottom: 1px dotted var(--ink-soft);
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+.readout.fresh { animation: stamp .35s ease-out; }
+@keyframes stamp { from { background: var(--yellow); } to { background: rgba(255,255,255,.55); } }
+
+/* ---------- side stack: buttons, cassettes ---------- */
+.buttons { display: flex; flex-wrap: wrap; gap: 18px; justify-content: space-around; align-items: center; }
+.tapes { display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-around; align-items: center; }
+.mini {
+  position: relative;
+  width: 104px; height: 66px;
+  background: linear-gradient(180deg, #4b4540, #2c2826);
+  border-radius: 7px;
+  border: 0;
+  padding: 7px;
+  cursor: pointer;
+  box-shadow: 0 3px 6px rgba(0,0,0,.4);
+  transform: rotate(var(--tilt, 0deg));
+  transition: transform .1s;
+}
+.mini:hover { transform: rotate(var(--tilt, 0deg)) translateY(-3px); }
+.mini:focus-visible { outline: 3px dashed var(--ink); outline-offset: 3px; }
+.mini .lab {
+  height: 30px; background: var(--paper); border-radius: 3px;
+  font-family: "Permanent Marker", cursive; font-size: 15px; color: var(--c, #2a3d7a);
+  display: grid; place-items: center;
+}
+.mini .holes { display: flex; justify-content: center; gap: 22px; margin-top: 6px; }
+.mini .holes i { width: 12px; height: 12px; border-radius: 50%; background: #e9e1cc; box-shadow: inset 0 0 0 3px #2a2624; }
+.mini.empty .lab { color: #9a907f; }
+.armed .mini { animation: jiggle .5s infinite alternate; }
+@keyframes jiggle { from { transform: rotate(calc(var(--tilt, 0deg) - 2deg)); } to { transform: rotate(calc(var(--tilt, 0deg) + 2deg)); } }
+
+/* ---------- typewriter paper ---------- */
+.typewriter { position: relative; }
+.platen {
+  height: 22px; border-radius: 11px;
+  background: linear-gradient(180deg, #2e2b29, #0f0e0d 60%, #2e2b29);
+  margin: 0 -10px -8px; position: relative; z-index: 2;
+  box-shadow: 0 3px 4px rgba(0,0,0,.4);
+}
+.sheet {
+  background: #fbf7ea;
+  background-image: repeating-linear-gradient(180deg, transparent 0 21px, rgba(44,90,160,.13) 21px 22px);
+  height: 260px;
+  overflow-y: auto;
+  padding: 16px 18px 12px 44px;
+  font-size: 15px;
+  line-height: 22px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-shadow: inset 0 8px 10px -6px rgba(0,0,0,.35);
+  position: relative;
+  scrollbar-width: thin;
+}
+.sheet::before {
+  content: ""; position: absolute; left: 32px; top: 0; bottom: 0; width: 1px;
+  background: rgba(200,55,45,.5);
+}
+.sheet .ln { min-height: 22px; }
+.sheet .ln.out { color: #1c1a17; }
+.sheet .ln.sent { color: var(--red); }
+.sheet .ln.sys { color: var(--blue); }
+.caret { display: inline-block; width: 8px; height: 15px; background: var(--ink); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.cmd { display: flex; gap: 10px; margin-top: 12px; align-items: center; }
+.cmd input {
+  flex: 1; min-width: 0;
+  font: 16px "Special Elite", monospace;
+  background: transparent; border: 0; border-bottom: 2px solid var(--ink);
+  padding: 6px 2px; color: var(--ink);
+}
+.cmd input:focus { outline: none; border-bottom-color: var(--red); }
+
+footer { margin-top: 46px; font-size: 14px; color: #2a1d0f; text-align: center; }
+footer span { background: rgba(244,236,214,.8); padding: 4px 10px; display: inline-block; transform: rotate(-.6deg); }
+
+@media (max-width: 560px) {
+  .ctl { width: 84px; }
+  .card { padding: 30px 12px 16px; }
+  .deco { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .armed .mini, .caret, .readout.fresh { animation: none; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="title">
+      <span class="dymo red big">Ferric</span>
+      <div class="sub">
+        <span class="dymo">tape machine</span>
+        <span class="dymo blue" style="--tilt:-2deg">+ cumulus send</span>
+      </div>
+    </div>
+    <div class="cassette" aria-hidden="true">
+      <div class="label">
+        <div class="hand">wobbly mix ~ 12 bit</div>
+        <div class="side">A</div>
+      </div>
+      <div class="window">
+        <svg class="reel" id="reelL" viewBox="-50 -50 100 100"></svg>
+        <svg class="reel" id="reelR" viewBox="-50 -50 100 100"></svg>
+      </div>
+      <div class="bottom"></div>
+    </div>
+  </header>
+
+  <section class="deck">
+    <button class="btn wide" id="connect" style="--bg:var(--green);--tilt:-1.5deg">Plug in</button>
+    <span class="status-line"><span class="lamp" id="lamp"></span><span id="status">not plugged in: the knobs work, nothing is sent</span></span>
+  </section>
+
+  <div class="board" id="board"></div>
+
+  <footer><span>drag a knob up or down &middot; shift for fine &middot; double-click for its default &middot; arrow keys work too</span></footer>
+</main>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// The sketch's controls, numbered as FerricTape.ino numbers them. `def` is
+// the plug-in's default (ferric_tape.cpp, cumulus_reverb.cpp, the sketch);
+// `show` is the readout until the Teensy prints its own.
+const pct = v => Math.round(v * 100) + "%";
+const CONTROLS = [
+  { t: 0,  name: "Drive",    group: "signal",    def: 0.25, show: v => Math.round(24 * v) + " dB" },
+  { t: 1,  name: "Comp",     group: "signal",    def: 0.30, show: v => (1 + 5 * v).toFixed(1) + ":1" },
+  { t: 2,  name: "Bits",     group: "signal",    def: 0.30, show: v => (16 - 12 * v).toFixed(1) + " bits" },
+  { t: 3,  name: "Tone",     group: "signal",    def: 0.45, show: v => (1.2 * Math.pow(16 / 1.2, v)).toFixed(1) + " kHz" },
+  { t: 4,  name: "Wow",      group: "transport", def: 0.30, show: pct },
+  { t: 5,  name: "Flutter",  group: "transport", def: 0.25, show: pct },
+  { t: 6,  name: "Dropout",  group: "transport", def: 0.15, show: pct },
+  { t: 7,  name: "Chorus",   group: "transport", def: 0.25, show: pct },
+  { t: 8,  name: "Time",     group: "slap",      def: 0.35, show: v => Math.round(40 * Math.pow(350 / 40, v)) + " ms" },
+  { t: 9,  name: "Feedback", group: "slap",      def: 0.35, show: pct },
+  { t: 10, name: "Slap",     group: "slap",      def: 0.30, show: pct },
+  { t: 11, name: "Mix",      group: "slap",      def: 1.00, show: pct },
+  { t: 12, name: "verb Time",    label: "Time",    group: "verb", def: 0.50, show: v => v.toFixed(2) },
+  { t: 13, name: "verb Diffuse", label: "Diffuse", group: "verb", def: 0.75, show: v => v.toFixed(2) },
+  { t: 14, name: "verb Tone",    label: "Tone",    group: "verb", def: 0.50, show: v => v.toFixed(2) },
+  { t: 15, name: "verb Input",   label: "Input",   group: "verb", def: 0.50, show: v => v.toFixed(2) },
+  { t: 16, name: "Low cut",  group: "send", def: 0.35, show: v => Math.round(40 * Math.pow(50, v)) + " Hz" },
+  { t: 17, name: "Verb",     group: "send", def: 0.35, show: pct },
+];
+const BY_NAME = new Map(CONTROLS.map(c => [c.name, c]));
+
+const GROUPS = [
+  { id: "signal",    title: "Signal",    dymo: "red",   kind: "index", tilt: -1.4, note: "squeeze, push, crush",
+    tapes: ["tl", "tr"], deco: { cls: "dot", text: "12<br>BIT", bg: "#f2c230", color: "#2a2620", style: "right:-18px;bottom:-16px", tilt: 12 } },
+  { id: "transport", title: "Transport", dymo: "",      kind: "graph", tilt: 1.1,  note: "the motor's bad day",
+    tapes: ["tc"], deco: { cls: "star", text: "WOW!", bg: "#e94f37", color: "#fff", style: "right:-22px;top:-30px", tilt: -14 } },
+  { id: "slap",      title: "Slap",      dymo: "blue",  kind: "kraft", tilt: -0.7, note: "the head that answers back",
+    tapes: ["tl", "bl"], deco: { cls: "rect", text: "DO NOT<br>ERASE", bg: "#fffdf6", color: "#c8372d", style: "right:-10px;bottom:-14px;border-color:#c8372d", tilt: -8 } },
+  { id: "send",      title: "Send",      dymo: "green", kind: "index", tilt: 1.6,  note: "low cut, then into the clouds",
+    tapes: ["tr"], deco: null },
+  { id: "verb",      title: "Cumulus",   dymo: "green", kind: "graph", tilt: -1.2, note: "the reverb, all wet",
+    tapes: ["tl", "tr"], deco: { cls: "dot", text: "&#9729;", bg: "#9fc7e8", color: "#1f4f9a", style: "left:-20px;bottom:-18px;font-size:26px", tilt: 0 } },
+];
+
+// ---------------------------------------------------------------------------
+// State, and a little seeded wonk so the tilts stay put between reloads.
+const values = new Map(CONTROLS.map(c => [c.t, c.def]));
+let bypassed = false;
+const wonk = (seed, span) => {
+  const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+  return ((x - Math.floor(x)) * 2 - 1) * span;
+};
+
+const el = (tag, attrs = {}, html = "") => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "style") e.style.cssText = v;
+    else if (k === "class") e.className = v;
+    else e.setAttribute(k, v);
+  }
+  if (html) e.innerHTML = html;
+  return e;
+};
+
+// ---------------------------------------------------------------------------
+// The board.
+const board = document.getElementById("board");
+const knobs = new Map();
+
+function tickSvg() {
+  let s = '<svg class="ticks" viewBox="-42 -42 84 84" aria-hidden="true">';
+  for (let i = 0; i <= 10; i++) {
+    const a = (-135 + 27 * i) * Math.PI / 180;
+    const r1 = i % 5 === 0 ? 33 : 35, r2 = 40;
+    s += `<line x1="${(Math.sin(a) * r1).toFixed(2)}" y1="${(-Math.cos(a) * r1).toFixed(2)}" x2="${(Math.sin(a) * r2).toFixed(2)}" y2="${(-Math.cos(a) * r2).toFixed(2)}" stroke="#2a2620" stroke-width="${i % 5 === 0 ? 2.4 : 1.4}" stroke-linecap="round"/>`;
+  }
+  return s + "</svg>";
+}
+
+function makeKnob(c) {
+  const wrap = el("div", { class: "ctl", style: `--tilt:${wonk(c.t + 1, 3).toFixed(2)}deg` });
+  const label = el("span", { class: "dymo" + (c.group === "verb" || c.group === "send" ? " green" : c.group === "slap" ? " blue" : ""), style: `--tilt:${wonk(c.t + 40, 4).toFixed(2)}deg` }, c.label || c.name);
+  const dial = el("div", { class: "dial" }, tickSvg());
+  const knob = el("div", {
+    class: "knob", tabindex: "0", role: "slider",
+    "aria-label": c.name, "aria-valuemin": "0", "aria-valuemax": "127",
+  });
+  knob.appendChild(el("div", { class: "cap" }));
+  dial.appendChild(knob);
+  const readout = el("div", { class: "readout" });
+  wrap.append(label, dial, readout);
+
+  const k = { c, knob, readout, deviceText: null };
+  knobs.set(c.t, k);
+  render(k);
+
+  // Drag: up or right is more; shift is fine.
+  let startY = 0, startX = 0, startV = 0;
+  knob.addEventListener("pointerdown", e => {
+    knob.setPointerCapture(e.pointerId);
+    startY = e.clientY; startX = e.clientX; startV = values.get(c.t);
+    knob.focus();
+  });
+  knob.addEventListener("pointermove", e => {
+    if (!knob.hasPointerCapture(e.pointerId)) return;
+    const travel = (startY - e.clientY) + (e.clientX - startX) * 0.5;
+    setValue(c.t, startV + travel / (e.shiftKey ? 900 : 180));
+  });
+  knob.addEventListener("dblclick", () => setValue(c.t, c.def));
+  knob.addEventListener("wheel", e => {
+    e.preventDefault();
+    setValue(c.t, values.get(c.t) - Math.sign(e.deltaY) / 127 * (e.shiftKey ? 1 : 4));
+  }, { passive: false });
+  knob.addEventListener("keydown", e => {
+    const step = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1, PageUp: 10, PageDown: -10 }[e.key];
+    if (step) { e.preventDefault(); setValue(c.t, values.get(c.t) + step / 127 * (e.shiftKey ? 1 : 4)); }
+    else if (e.key === "Home") { e.preventDefault(); setValue(c.t, 0); }
+    else if (e.key === "End") { e.preventDefault(); setValue(c.t, 1); }
+  });
+  return wrap;
+}
+
+function render(k) {
+  const v = values.get(k.c.t);
+  k.knob.querySelector(".cap").style.setProperty("--angle", (-135 + 270 * v).toFixed(1) + "deg");
+  const midi = Math.round(v * 127);
+  k.knob.setAttribute("aria-valuenow", String(midi));
+  const text = k.deviceText ?? k.c.show(midi / 127);
+  k.knob.setAttribute("aria-valuetext", text);
+  k.readout.textContent = text;
+}
+
+function card(g, i) {
+  const c = el("section", { class: `card ${g.kind}${g.wide ? " wide" : ""}`, style: `--tilt:${g.tilt}deg` });
+  for (const t of g.tapes) c.appendChild(el("span", { class: `tape ${t}` }));
+  c.appendChild(el("div", { class: "head" }, `<span class="dymo ${g.dymo}" style="--tilt:${wonk(i + 90, 3).toFixed(2)}deg;font-size:15px">${g.title}</span>`));
+  if (g.note) c.appendChild(el("p", { class: "note" }, g.note));
+  if (g.deco) {
+    const d = g.deco;
+    c.appendChild(el("span", { class: `deco ${d.cls}`, style: `background:${d.bg};color:${d.color};--tilt:${d.tilt}deg;${d.style}` }, d.text));
+  }
+  return c;
+}
+
+GROUPS.forEach((g, i) => {
+  const c = card(g, i);
+  const row = el("div", { class: "knobs" });
+  for (const ctl of CONTROLS.filter(x => x.group === g.id)) row.appendChild(makeKnob(ctl));
+  c.appendChild(row);
+  board.appendChild(c);
+});
+
+// Buttons and cassettes.
+const ctlCard = card({ title: "Buttons", dymo: "red", kind: "kraft", tilt: -1.8, tapes: ["tc"], note: "press firmly",
+  deco: { cls: "dot", text: "NR<br>OFF", bg: "#2c5aa0", color: "#fff", style: "right:-16px;top:-22px", tilt: 18 } }, 7);
+const buttons = el("div", { class: "buttons" });
+const bypassBtn = el("button", { class: "btn", style: "--bg:#d9862b;--tilt:-6deg", "aria-pressed": "false" }, "Bypass");
+const eraseBtn = el("button", { class: "btn", style: "--bg:#c8372d;--tilt:5deg" }, "Erase<br>tape");
+const clearBtn = el("button", { class: "btn", style: "--bg:#2c5aa0;--tilt:-3deg" }, "Clear<br>verb");
+const statusBtn = el("button", { class: "btn", style: "--bg:#3d7a3a;--tilt:8deg" }, "Status");
+buttons.append(bypassBtn, eraseBtn, clearBtn, statusBtn);
+ctlCard.appendChild(buttons);
+board.appendChild(ctlCard);
+
+bypassBtn.addEventListener("click", () => {
+  bypassed = !bypassed;
+  bypassBtn.classList.toggle("lit", bypassed);
+  bypassBtn.setAttribute("aria-pressed", String(bypassed));
+  send(`v b ${bypassed ? 127 : 0}`);
+});
+eraseBtn.addEventListener("click", () => send("v e 127"));
+clearBtn.addEventListener("click", () => send("v r 127"));
+statusBtn.addEventListener("click", () => send("s"));
+
+// Cassettes: four presets kept in this browser.
+const tapeCard = card({ title: "Mixtapes", dymo: "blue", kind: "index", tilt: 1.3, tapes: ["tl", "tr"],
+  note: "click to play · arm REC, then click to keep", deco: null }, 8);
+const tapes = el("div", { class: "tapes" });
+const recBtn = el("button", { class: "btn", style: "--bg:#c8372d;--tilt:-7deg;width:70px;height:70px", "aria-pressed": "false" }, "Rec");
+const SLOTS = ["A", "B", "C", "D"];
+const INK = ["#2a3d7a", "#c8372d", "#3d7a3a", "#7a2a6d"];
+let armed = false;
+let saved = {};
+try { saved = JSON.parse(localStorage.getItem("ferric-panel-tapes") || "{}") || {}; } catch (e) { saved = {}; }
+const minis = SLOTS.map((s, i) => {
+  const m = el("button", { class: "mini", style: `--tilt:${wonk(i + 200, 6).toFixed(2)}deg;--c:${INK[i]}`, "aria-label": `cassette ${s}` },
+    `<div class="lab"></div><div class="holes"><i></i><i></i></div>`);
+  const paint = () => {
+    m.classList.toggle("empty", !saved[s]);
+    m.querySelector(".lab").textContent = saved[s] ? `side ${s}` : `${s} · blank`;
+  };
+  paint();
+  m.addEventListener("click", () => {
+    if (armed) {
+      saved[s] = Object.fromEntries(values);
+      try { localStorage.setItem("ferric-panel-tapes", JSON.stringify(saved)); } catch (e) { /* kept for this visit */ }
+      paint();
+      setArmed(false);
+      typeLine(`recorded onto ${s}`, "sys");
+    } else if (saved[s]) {
+      for (const [t, v] of Object.entries(saved[s])) setValue(Number(t), v);
+      typeLine(`playing ${s}`, "sys");
+    } else {
+      typeLine(`${s} is blank: arm REC first`, "sys");
+    }
+  });
+  return m;
+});
+function setArmed(on) {
+  armed = on;
+  recBtn.classList.toggle("lit", on);
+  recBtn.setAttribute("aria-pressed", String(on));
+  tapes.classList.toggle("armed", on);
+}
+recBtn.addEventListener("click", () => setArmed(!armed));
+tapes.append(recBtn, ...minis);
+tapeCard.appendChild(tapes);
+board.appendChild(tapeCard);
+
+// The typewriter.
+const twCard = card({ title: "Teletype", dymo: "", kind: "kraft", tilt: -0.5, tapes: ["tl", "tr"], wide: true,
+  note: "what the Teensy says; type its own commands below (l, c, a, x, L, h, s)",
+  deco: { cls: "rect", text: "C-90", bg: "#f2c230", color: "#2a2620", style: "right:24px;top:-18px", tilt: 6 } }, 9);
+const tw = el("div", { class: "typewriter" });
+const platen = el("div", { class: "platen" });
+const sheet = el("div", { class: "sheet", "aria-live": "polite" });
+tw.append(platen, sheet);
+const cmd = el("form", { class: "cmd" });
+const cmdInput = el("input", { type: "text", placeholder: "l", "aria-label": "command for the sketch", autocomplete: "off", spellcheck: "false" });
+const cmdBtn = el("button", { class: "btn wide", type: "submit", style: "--bg:#2a2620;--tilt:2deg" }, "Send");
+cmd.append(cmdInput, cmdBtn);
+twCard.append(tw, cmd);
+board.appendChild(twCard);
+cmd.addEventListener("submit", e => {
+  e.preventDefault();
+  const line = cmdInput.value.trim();
+  if (line) send(line);
+  cmdInput.value = "";
+});
+
+// ---------------------------------------------------------------------------
+// Typing: one character at a time, as a typewriter would, faster when behind.
+const queue = [];
+let typing = false;
+const caret = el("span", { class: "caret" });
+function typeLine(text, kind = "out") {
+  queue.push({ text, kind });
+  if (!typing) typeNext();
+}
+function typeNext() {
+  const job = queue.shift();
+  if (!job) { typing = false; return; }
+  typing = true;
+  const ln = el("div", { class: `ln ${job.kind}` });
+  sheet.appendChild(ln);
+  while (sheet.children.length > 200) sheet.removeChild(sheet.firstChild);
+  let i = 0;
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const tick = () => {
+    const burst = reduced ? job.text.length : 1 + Math.floor(queue.length / 3);
+    i = Math.min(job.text.length, i + burst);
+    ln.textContent = job.text.slice(0, i);
+    ln.appendChild(caret);
+    sheet.scrollTop = sheet.scrollHeight;
+    if (i < job.text.length) setTimeout(tick, 9 + Math.random() * 22);
+    else setTimeout(typeNext, 30);
+  };
+  tick();
+}
+
+// ---------------------------------------------------------------------------
+// Values: moving a knob sends it, at most one line per control per 25 ms.
+const pending = new Map();
+let flushTimer = null;
+function setValue(t, v) {
+  v = Math.min(1, Math.max(0, v));
+  const before = Math.round(values.get(t) * 127);
+  values.set(t, v);
+  const k = knobs.get(t);
+  if (k) { k.deviceText = null; render(k); }
+  const midi = Math.round(v * 127);
+  if (midi === before) return;
+  pending.set(t, midi);
+  if (!flushTimer) flushTimer = setTimeout(flush, 25);
+}
+function flush() {
+  flushTimer = null;
+  for (const [t, midi] of pending) send(`v ${t} ${midi}`, true);
+  pending.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Web Serial.
+let port = null, writer = null;
+const encoder = new TextEncoder();
+const connectBtn = document.getElementById("connect");
+const statusEl = document.getElementById("status");
+const lamp = document.getElementById("lamp");
+
+async function send(line, quiet = false) {
+  if (!writer) {
+    if (!quiet) typeLine(`> ${line}   (not plugged in)`, "sent");
+    return;
+  }
+  if (!quiet) typeLine(`> ${line}`, "sent");
+  try { await writer.write(encoder.encode(line + "\n")); }
+  catch (e) { typeLine(`lost the Teensy: ${e.message}`, "sys"); disconnect(); }
+}
+
+function setConnected(on, text) {
+  lamp.classList.toggle("on", on);
+  statusEl.textContent = text;
+  connectBtn.textContent = on ? "Unplug" : "Plug in";
+}
+
+// Lines reporting a control's value update its readout with the sketch's
+// own text; the echo of a knob being turned is not typed, as a sweep would
+// bury the paper. Everything else is.
+function heard(line) {
+  if (!line.trim()) return;
+  let m = line.match(/^\s*(\d+)\s+(.+?) = (.*)$/);  // l: "  3 Tone = 5.50kHz"
+  if (m) { deviceSays(Number(m[1]), m[3]); typeLine(line, "out"); return; }
+  m = line.match(/^(.+?) = (.*)$/);                 // a change: "Tone = 5.50kHz"
+  if (m && m[1] === "bypass") {
+    bypassed = m[2].trim() === "on";
+    bypassBtn.classList.toggle("lit", bypassed);
+    bypassBtn.setAttribute("aria-pressed", String(bypassed));
+  } else if (m && BY_NAME.has(m[1])) {
+    deviceSays(BY_NAME.get(m[1]).t, m[2]);
+    return;
+  }
+  typeLine(line, "out");
+}
+function deviceSays(t, text) {
+  const k = knobs.get(t);
+  if (!k) return;
+  k.deviceText = text.trim();
+  render(k);
+  k.readout.classList.remove("fresh");
+  void k.readout.offsetWidth;
+  k.readout.classList.add("fresh");
+}
+
+async function readLoop(p) {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (p.readable) {
+    const reader = p.readable.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop();
+        lines.forEach(heard);
+      }
+    } catch (e) {
+      break;
+    } finally {
+      reader.releaseLock();
+    }
+  }
+}
+
+async function connect() {
+  if (!("serial" in navigator)) {
+    typeLine("this browser has no Web Serial: use Chrome or Edge, from this file or `make panel`", "sys");
+    return;
+  }
+  try {
+    port = await navigator.serial.requestPort({ filters: [{ usbVendorId: 0x16c0 }] });
+    await port.open({ baudRate: 115200 });
+  } catch (e) {
+    port = null;
+    typeLine(e.name === "NotFoundError" ? "no Teensy picked" : `could not open the port: ${e.message} (is the serial monitor still open?)`, "sys");
+    return;
+  }
+  writer = port.writable.getWriter();
+  setConnected(true, "plugged in: every knob goes to the Teensy");
+  typeLine("plugged in. asking for the controls...", "sys");
+  readLoop(port).then(() => { if (port) disconnect(); });
+  send("l");
+}
+
+async function disconnect() {
+  const p = port;
+  port = null;
+  if (writer) { try { writer.releaseLock(); } catch (e) { /* already gone */ } writer = null; }
+  if (p) {
+    try { await p.readable?.cancel(); } catch (e) { /* closing anyway */ }
+    try { await p.close(); } catch (e) { /* closing anyway */ }
+  }
+  for (const k of knobs.values()) { k.deviceText = null; render(k); }
+  setConnected(false, "not plugged in: the knobs work, nothing is sent");
+  typeLine("unplugged", "sys");
+}
+
+connectBtn.addEventListener("click", () => (port ? disconnect() : connect()));
+if ("serial" in navigator) navigator.serial.addEventListener("disconnect", e => { if (e.target === port) disconnect(); });
+
+// When the page's knobs and the Teensy disagree, as after reconnecting to a
+// sketch that was left running, right-click Plug in to push them all.
+connectBtn.addEventListener("contextmenu", e => {
+  e.preventDefault();
+  for (const c of CONTROLS) send(`v ${c.t} ${Math.round(values.get(c.t) * 127)}`, true);
+  typeLine("pushed every knob to the Teensy", "sys");
+});
+
+// ---------------------------------------------------------------------------
+// The reels: they turn at the tape's speed, which the Wow and Flutter knobs
+// wobble and the Dropout knob catches now and then.
+function reelSvg(svg) {
+  let s = '<circle r="46" fill="#3b2a1c"/><circle r="44" fill="#5a3f28"/>';
+  s += '<g class="hub"><circle r="20" fill="#efe6d0"/>';
+  for (let i = 0; i < 6; i++) {
+    const a = i * 60;
+    s += `<rect x="-3" y="-20" width="6" height="9" rx="1.5" fill="#2a2624" transform="rotate(${a})"/>`;
+  }
+  s += '<circle r="7" fill="#2a2624"/></g>';
+  svg.innerHTML = s;
+  return svg.querySelector(".hub");
+}
+const hubs = [reelSvg(document.getElementById("reelL")), reelSvg(document.getElementById("reelR"))];
+let angle = 0, last = performance.now(), stall = 0;
+function spin(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  const sec = now / 1000;
+  const wow = values.get(4) ** 2, flutter = values.get(5) ** 2, drop = values.get(6) ** 2;
+  let speed = bypassed ? 0.35 : 1;
+  speed *= 1 + 0.35 * wow * Math.sin(sec * 2 * Math.PI * 0.55) + 0.12 * flutter * Math.sin(sec * 2 * Math.PI * 7.5);
+  if (stall > 0) { stall -= dt; speed *= 0.15; }
+  else if (Math.random() < drop * 1.5 * dt) stall = 0.08 + Math.random() * 0.25;
+  angle = (angle + speed * 160 * dt) % 360;
+  hubs[0].setAttribute("transform", `rotate(${angle.toFixed(2)})`);
+  hubs[1].setAttribute("transform", `rotate(${(angle * 1.3).toFixed(2)})`);
+  requestAnimationFrame(spin);
+}
+if (!matchMedia("(prefers-reduced-motion: reduce)").matches) requestAnimationFrame(spin);
+
+typeLine("FERRIC front panel. plug in the Teensy to start.", "sys");
+typeLine("(right-click Plug in to push every knob to it.)", "sys");
+</script>
+</body>
+</html>

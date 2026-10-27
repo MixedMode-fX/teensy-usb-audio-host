@@ -29,7 +29,7 @@ EXAMPLE ?= passthrough
 BOARD ?= teensy41
 FIRMWARE_ENV := $(EXAMPLE)_$(BOARD)
 
-.PHONY: help setup ready checks test build size upload monitor clean distclean
+.PHONY: help setup ready checks test build size upload monitor panel clean distclean
 
 help:
 	@echo "make setup    - install PlatformIO into .venv/ and pre-fetch the toolchains"
@@ -40,6 +40,7 @@ help:
 	@echo "make size     - memory usage of the Passthrough example on a Teensy 4.1"
 	@echo "make upload   - flash an attached Teensy with $(FIRMWARE_ENV)"
 	@echo "make monitor  - the Teensy's serial output (Ctrl+C to quit)"
+	@echo "make panel    - the FerricTape web panel on http://localhost:8000 (Chrome or Edge)"
 	@echo "make clean    - remove build output"
 	@echo ""
 	@echo "upload and monitor take EXAMPLE= and BOARD= (teensy41, teensy36);"
@@ -76,6 +77,11 @@ upload: $(PIO)
 # The examples all open Serial at 115200, the monitor_speed in platformio.ini.
 monitor: $(PIO)
 	$(PIO) device monitor -e $(FIRMWARE_ENV)
+
+# The FerricTape sketch's front panel, over Web Serial; it holds the port,
+# so not at the same time as monitor.
+panel: $(PIO)
+	.venv/bin/python$(EXE) -m http.server 8000 --bind 127.0.0.1 -d examples/FerricTape/panel
 
 clean: $(PIO)
 	$(PIO) run -t clean

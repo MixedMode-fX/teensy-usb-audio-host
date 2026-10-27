@@ -61,6 +61,9 @@
 //   L <t>          learn: the next control change to arrive is mapped to t
 //   h <ch>         listen on MIDI channel ch (1 to 16), or 0 for all of them
 //   s              stream status, MIDI devices and processor use
+//
+// panel/index.html is a front panel for these commands in the browser, over
+// Web Serial (Chrome or Edge): open it, or run `make panel`, and plug in.
 
 #include <Audio.h>
 #include <USBHost_t36.h>
