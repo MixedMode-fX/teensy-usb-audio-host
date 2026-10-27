@@ -121,7 +121,7 @@ lists its keys at the top and `s` prints the status everywhere.
 | `VSTHostMIDI` | The `VSTHost` rack played from a USB MIDI controller on a hub beside the interface: CCs mapped to plug-in parameters, mix, gain and bypass, with MIDI learn. |
 | `LineCheck`   | Bring-up for a new interface: silence, a test tone or the inputs on the outputs, and the input peaks, to tell a bad output from a bad input. |
 | `CumulusReverb` | The reverb of Mutable Instruments' Clouds, from its unmodified sources, as a plug-in played from a USB MIDI controller: amount, time, diffusion, tone and input on CCs, bypass and clear on buttons, with MIDI learn. |
-| `FerricTape`  | A worn tape machine with a slap-back head, as a plug-in played the same way: compression, arctan drive, bit reduction, wow, flutter, dropouts, tone, a chorus off the same transport and a dark, saturating slap with feedback, in Clouds' 12-bit delay format. |
+| `FerricTape`  | A worn tape machine with a slap-back head, as a plug-in played the same way: compression, arctan drive, bit reduction, wow, flutter, dropouts, tone, a chorus off the same transport and a dark, saturating slap with feedback, in Clouds' 12-bit delay format; then a send through a low cut to the `CumulusReverb` reverb. |
 
 They all ask the interface for 44.1 kHz because the Audio Library's effects
 assume it; the graph runs at whatever rate the interface ends up streaming,
