@@ -27,13 +27,17 @@
 //   CC 20  Diffuse
 //   CC 74  Tone      (sound controller 5: brightness)
 //   CC 21  Input
+//   CC 22  Clock
+//   CC 23  Warp
+//   CC 24  Speed
+//   CC 25  Glitch
 //   CC 80  bypass, on at 64 and above, as a latching button sends it
 //   CC 81  clear the tail, when pressed (64 and above)
 //
 // A CC's 0..127 is the control's 0..1.
 //
 // Serial monitor, one command per line; t names a control: its number
-// (0 Amount .. 4 Input), b (bypass) or e (clear, as in empty):
+// (0 Amount .. 8 Glitch), b (bypass) or e (clear, as in empty):
 //   l              the controls and their values
 //   c              the CC map
 //   v <t> <0..127> set a control as a control change would
@@ -88,6 +92,10 @@ static void defaultMap()
     cc_map[20] = CumulusReverb::PARAM_DIFFUSION;
     cc_map[74] = CumulusReverb::PARAM_TONE;
     cc_map[21] = CumulusReverb::PARAM_INPUT;
+    cc_map[22] = CumulusReverb::PARAM_CLOCK;
+    cc_map[23] = CumulusReverb::PARAM_WARP;
+    cc_map[24] = CumulusReverb::PARAM_SPEED;
+    cc_map[25] = CumulusReverb::PARAM_GLITCH;
     cc_map[80] = CONTROL_BYPASS;
     cc_map[81] = CONTROL_CLEAR;
 }

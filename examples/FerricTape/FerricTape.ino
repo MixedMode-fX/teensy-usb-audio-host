@@ -4,12 +4,12 @@
 // controller. Each of its controls answers a control change number, by a
 // default map or by MIDI learn, and the serial monitor shows what moved.
 //
-//   in -> tape -+-------------------------------+-> mixer -> out
+//   in -> tape -+-------------------------------+-> mixer -> volume -> out
 //               +-> low cut -> Cumulus reverb --+
 //
 // The tape reaches the output whole; the reverb hears it without its low
 // end, so the tail stays clear of the bass, and returns fully wet at the
-// Verb level.
+// Verb level. Volume is the last thing before the outputs.
 //
 // Wiring: a powered USB hub into the Teensy's host port, with the audio
 // interface and the MIDI controller both on the hub, as for the VSTHostMIDI
@@ -36,13 +36,13 @@
 //   CC 21  Comp                CC 30  verb Diffuse
 //   CC 22  Bits                CC 31  verb Tone
 //   CC 74  Tone (brightness)   CC 85  verb Input
-//   CC 23  Wow                 CC 86  Low cut, 40 Hz to 2 kHz
-//   CC 24  Flutter             CC 91  Verb, its level (effects 1: reverb)
-//   CC 25  Dropout
-//   CC 93  Chorus (effects 3: chorus)
-//   CC 26  Time
-//   CC 27  Feedback
-//   CC 28  Slap
+//   CC 23  Wow                 CC 87  verb Clock
+//   CC 24  Flutter             CC 88  verb Warp
+//   CC 25  Dropout             CC 89  verb Speed
+//   CC 93  Chorus (effects 3)  CC 90  verb Glitch
+//   CC 26  Time                CC 86  Low cut, 40 Hz to 2 kHz
+//   CC 27  Feedback            CC 91  Verb, its level (effects 1: reverb)
+//   CC 28  Slap                CC 7   Volume (channel volume), -inf to +6 dB, 0 at 101
 //   CC 29  Mix
 //   CC 80  bypass the tape, on at 64 and above, as a latching button sends it
 //   CC 81  erase the tape and the echoes, when pressed (64 and above)
@@ -51,7 +51,7 @@
 // A CC's 0..127 is the control's 0..1.
 //
 // Serial monitor, one command per line; t names a control: its number
-// (0 Drive .. 17 Verb, as l lists them), b (bypass), e (erase) or r (clear
+// (0 Drive .. 22 Volume, as l lists them), b (bypass), e (erase) or r (clear
 // the reverb):
 //   l              the controls and their values
 //   c              the CC map
@@ -86,6 +86,8 @@ AudioFilterBiquad lowcutR;
 AudioEffectVST<CumulusReverb> reverb;
 AudioMixer4 mixL;
 AudioMixer4 mixR;
+AudioAmplifier volumeL;
+AudioAmplifier volumeR;
 AudioOutputUSBHost out(interface, 2);
 
 AudioConnection c1(in, 0, tape, 0);
@@ -98,27 +100,32 @@ AudioConnection c7(lowcutL, 0, reverb, 0);
 AudioConnection c8(lowcutR, 0, reverb, 1);
 AudioConnection c9(reverb, 0, mixL, 1);
 AudioConnection c10(reverb, 1, mixR, 1);
-AudioConnection c11(mixL, 0, out, 0);
-AudioConnection c12(mixR, 0, out, 1);
+AudioConnection c11(mixL, 0, volumeL, 0);
+AudioConnection c12(mixR, 0, volumeR, 0);
+AudioConnection c13(volumeL, 0, out, 0);
+AudioConnection c14(volumeR, 0, out, 1);
 
 // What a control change drives: the tape's parameters, numbered as the
 // plug-in numbers them, then the reverb's but its Amount (the send runs it
-// fully wet), then the low cut and the reverb's level; or one of the
-// buttons.
+// fully wet), then the low cut, the reverb's level and the volume; or one
+// of the buttons.
 static const int8_t VERB_FIRST = FerricTape::NUM_PARAMS;
 static const int8_t VERB_COUNT = CumulusReverb::NUM_PARAMS - 1;
 static const int8_t CONTROL_LOW_CUT = VERB_FIRST + VERB_COUNT;
 static const int8_t CONTROL_VERB = CONTROL_LOW_CUT + 1;
-static const int8_t NUM_CONTROLS = CONTROL_VERB + 1;
+static const int8_t CONTROL_VOLUME = CONTROL_VERB + 1;
+static const int8_t NUM_CONTROLS = CONTROL_VOLUME + 1;
 static const int8_t UNMAPPED = -1;
 static const int8_t CONTROL_BYPASS = -2;
 static const int8_t CONTROL_ERASE = -3;
 static const int8_t CONTROL_CLEAR = -4;
 static int8_t cc_map[128];
 
-// The low cut's and the reverb level's 0..1, as a CC sets them.
+// The low cut's, the reverb level's and the volume's 0..1, as a CC sets
+// them. The volume's gain is a cube, 0 dB at CC 101 and +6 dB at 127.
 static float low_cut = 0.35f;
 static float verb_level = 0.35f;
+static float volume = 101.0f / 127.0f;
 
 static uint8_t midi_channel = 0;  // 1..16, 0 for every channel
 static bool learning = false;
@@ -148,8 +155,13 @@ static void defaultMap()
     cc_map[30] = VERB_FIRST + CumulusReverb::PARAM_DIFFUSION - 1;
     cc_map[31] = VERB_FIRST + CumulusReverb::PARAM_TONE - 1;
     cc_map[85] = VERB_FIRST + CumulusReverb::PARAM_INPUT - 1;
+    cc_map[87] = VERB_FIRST + CumulusReverb::PARAM_CLOCK - 1;
+    cc_map[88] = VERB_FIRST + CumulusReverb::PARAM_WARP - 1;
+    cc_map[89] = VERB_FIRST + CumulusReverb::PARAM_SPEED - 1;
+    cc_map[90] = VERB_FIRST + CumulusReverb::PARAM_GLITCH - 1;
     cc_map[86] = CONTROL_LOW_CUT;
     cc_map[91] = CONTROL_VERB;
+    cc_map[7] = CONTROL_VOLUME;
     cc_map[80] = CONTROL_BYPASS;
     cc_map[81] = CONTROL_ERASE;
     cc_map[82] = CONTROL_CLEAR;
@@ -187,6 +199,18 @@ static void applyVerb()
     mixR.gain(1, verb_level);
 }
 
+static float volumeGain()
+{
+    const float v = volume * (127.0f / 101.0f);
+    return v * v * v;
+}
+
+static void applyVolume()
+{
+    volumeL.gain(volumeGain());
+    volumeR.gain(volumeGain());
+}
+
 static void printTarget(int8_t t)
 {
     char text[VSTEffect::TEXT_LEN];
@@ -200,6 +224,8 @@ static void printTarget(int8_t t)
         Serial.print("Low cut");
     } else if (t == CONTROL_VERB) {
         Serial.print("Verb");
+    } else if (t == CONTROL_VOLUME) {
+        Serial.print("Volume");
     } else if (t >= VERB_FIRST) {
         reverb.parameterName(verbParameter(t), text);
         Serial.print("verb ");
@@ -223,6 +249,13 @@ static void printValue(int8_t t)
     } else if (t == CONTROL_VERB) {
         Serial.print(static_cast<int>(verb_level * 100.0f + 0.5f));
         Serial.print("%");
+    } else if (t == CONTROL_VOLUME) {
+        if (volume == 0.0f) {
+            Serial.print("-inf dB");
+        } else {
+            Serial.print(20.0f * log10f(volumeGain()), 1);
+            Serial.print(" dB");
+        }
     } else {
         VSTEffect& effect = t >= VERB_FIRST ? static_cast<VSTEffect&>(reverb) : static_cast<VSTEffect&>(tape);
         const int index = t >= VERB_FIRST ? verbParameter(t) : t;
@@ -247,6 +280,9 @@ static void apply(int8_t t, uint8_t value)
     } else if (t == CONTROL_VERB) {
         verb_level = value / 127.0f;
         applyVerb();
+    } else if (t == CONTROL_VOLUME) {
+        volume = value / 127.0f;
+        applyVolume();
     } else if (t >= VERB_FIRST) {
         reverb.setParameter(verbParameter(t), value / 127.0f);
     } else {
@@ -469,6 +505,7 @@ void setup()
     mixR.gain(0, 1.0f);
     applyVerb();
     applyLowCut();
+    applyVolume();
 
     defaultMap();
     midi1.setHandleControlChange(onControlChange);
