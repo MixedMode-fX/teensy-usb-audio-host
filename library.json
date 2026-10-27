@@ -42,6 +42,11 @@
         "clouds/README.md", "clouds/dsp/frame.h", "clouds/dsp/fx/fx_engine.h", "clouds/dsp/fx/reverb.h",
         "stmlib/LICENSE", "stmlib/stmlib.h", "stmlib/dsp/dsp.h", "stmlib/dsp/cosine_oscillator.h"
       ]
+    },
+    {
+      "name": "FerricTape",
+      "base": "examples/FerricTape",
+      "files": ["FerricTape.ino", "ferric_tape.h", "ferric_tape.cpp"]
     }
   ],
   "export": {

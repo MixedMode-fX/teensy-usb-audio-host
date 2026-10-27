@@ -61,7 +61,7 @@ test: $(PIO)
 	$(PIO) test -e native
 
 # Every example, for every board. scripts/checks.sh has the same list.
-EXAMPLES := passthrough linecheck record reverb delay overdrive modulation vsthost vstmidi cumulus
+EXAMPLES := passthrough linecheck record reverb delay overdrive modulation vsthost vstmidi cumulus ferric
 FIRMWARE_ENVS := $(foreach e,$(EXAMPLES),-e $(e)_teensy41 -e $(e)_teensy36)
 
 build: $(PIO)
